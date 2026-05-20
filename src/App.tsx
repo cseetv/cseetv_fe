@@ -644,11 +644,11 @@ export default function App() {
 
   // 이미지 상태
   const [img1Url, setImg1Url] = useState<string | null>(null);
-  // const [img1Data, setImg1Data] = useState<{
-  //   gray: Uint8Array;
-  //   w: number;
-  //   h: number;
-  // } | null>(null);
+  const [img1Data, setImg1Data] = useState<{
+    gray: Uint8Array;
+    w: number;
+    h: number;
+  } | null>(null);
 
   // 비디오 상태
   const { loadVideo, extractFrame, videoLoaded, videoInfo } = useVideoFrames();
