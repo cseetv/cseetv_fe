@@ -14,19 +14,25 @@ export function useWebSocket(
   onBinary: BinaryHandler,
 ) {
   const wsRef = useRef<WebSocket | null>(null);
+  const statusRef = useRef<WsStatus>("disconnected");
   const [status, setStatus] = useState<WsStatus>("disconnected");
   const retriesRef = useRef(0);
   const maxRetries = 5;
 
+  const updateStatus = (s: WsStatus) => {
+    statusRef.current = s;
+    setStatus(s);
+  };
+
   const connect = useCallback(() => {
     if (wsRef.current?.readyState === WebSocket.OPEN) return;
 
-    setStatus("connecting");
+    updateStatus("connecting");
     const ws = new WebSocket(`${WS_URL}/ws/stream`);
     ws.binaryType = "blob";
 
     ws.onopen = () => {
-      setStatus("connected");
+      updateStatus("connected");
       retriesRef.current = 0;
     };
 
@@ -38,16 +44,14 @@ export function useWebSocket(
           const msg: WsMessage = JSON.parse(event.data);
           onMessage(msg);
         } catch {
-          /* ignore parse errors */
+          /* ignore */
         }
       }
     };
 
     ws.onclose = () => {
-      setStatus("disconnected");
+      updateStatus("disconnected");
       wsRef.current = null;
-
-      // 자동 재연결
       if (retriesRef.current < maxRetries) {
         retriesRef.current++;
         setTimeout(connect, 3000);
@@ -55,17 +59,17 @@ export function useWebSocket(
     };
 
     ws.onerror = () => {
-      setStatus("error");
+      updateStatus("error");
     };
 
     wsRef.current = ws;
   }, [onMessage, onBinary]);
 
   const disconnect = useCallback(() => {
-    retriesRef.current = maxRetries; // 재연결 방지
+    retriesRef.current = maxRetries;
     wsRef.current?.close();
     wsRef.current = null;
-    setStatus("disconnected");
+    updateStatus("disconnected");
   }, []);
 
   const sendJson = useCallback((msg: object) => {
@@ -80,7 +84,24 @@ export function useWebSocket(
     }
   }, []);
 
-  // 언마운트 시 정리
+  /** 연결될 때까지 대기 후 전송 (ref 기반이라 클로저 문제 없음) */
+  const waitAndSend = useCallback((msg: object, maxWait = 8000) => {
+    const start = Date.now();
+    const check = () => {
+      if (wsRef.current?.readyState === WebSocket.OPEN) {
+        wsRef.current.send(JSON.stringify(msg));
+        console.log("[WS] 메시지 전송:", msg);
+        return;
+      }
+      if (Date.now() - start < maxWait) {
+        setTimeout(check, 200);
+      } else {
+        console.warn("[WS] 전송 타임아웃:", msg);
+      }
+    };
+    check();
+  }, []);
+
   useEffect(() => {
     return () => {
       retriesRef.current = maxRetries;
@@ -88,5 +109,5 @@ export function useWebSocket(
     };
   }, []);
 
-  return { status, connect, disconnect, sendJson, sendBinary };
+  return { status, connect, disconnect, sendJson, sendBinary, waitAndSend };
 }
