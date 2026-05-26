@@ -132,7 +132,6 @@ export default function App() {
   const [displaySize, setDisplaySize] = useState({ w: 640, h: 480 });
 
   const camera = useCamera();
-  const videoElRef = useRef<HTMLVideoElement>(null);
   const cameraVideoRef = useRef<HTMLVideoElement>(null);
   const cameraIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const displayRef = useRef<HTMLDivElement>(null);
@@ -194,22 +193,6 @@ export default function App() {
 
   const ws = useWebSocket(handleWsMessage, handleWsBinary);
 
-  // ── WebSocket 연결 대기 후 메시지 전송 ──
-  const sendWhenReady = useCallback(
-    (msg: object, maxWait = 5000) => {
-      const start = Date.now();
-      const check = () => {
-        if (ws.status === "connected") {
-          ws.sendJson(msg);
-          return;
-        }
-        if (Date.now() - start < maxWait) setTimeout(check, 200);
-      };
-      check();
-    },
-    [ws],
-  );
-
   // ── 영상 업로드 ──
   const handleVideoUpload = useCallback(
     async (file: File) => {
@@ -226,7 +209,7 @@ export default function App() {
         setVideoInfo(info);
         setMode("video");
         ws.connect();
-        sendWhenReady({
+        ws.waitAndSend({
           type: "start_video",
           video_id: info.video_id,
           include_previews: true,
@@ -237,14 +220,12 @@ export default function App() {
         setUploading(false);
       }
     },
-    [api, ws, videoPreviewUrl, sendWhenReady],
+    [api, ws, videoPreviewUrl],
   );
 
   // ── 카메라 ──
   const startCamera = useCallback(async () => {
-    const el = cameraVideoRef.current;
-    if (!el) return;
-    await camera.start(el);
+    // 먼저 mode를 바꿔서 video 요소가 렌더링되게 함
     setMode("camera");
     setTimeline([]);
     setAlerts([]);
@@ -252,13 +233,33 @@ export default function App() {
     setHeatmapUrl(null);
     setLastResult(null);
     ws.connect();
-    setTimeout(() => {
+  }, [ws]);
+
+  // mode가 camera로 바뀌면 video 요소가 렌더링된 후 카메라 시작
+  useEffect(() => {
+    if (mode !== "camera") return;
+    const el = cameraVideoRef.current;
+    if (!el) return;
+
+    let cancelled = false;
+    (async () => {
+      await camera.start(el);
+      if (cancelled) return;
+      // 프레임 캡처 루프 시작 (초당 2프레임)
       cameraIntervalRef.current = setInterval(async () => {
         const blob = await camera.captureFrameAsync();
         if (blob) ws.sendBinary(blob);
       }, 500);
-    }, 1200);
-  }, [camera, ws]);
+    })();
+
+    return () => {
+      cancelled = true;
+      if (cameraIntervalRef.current) {
+        clearInterval(cameraIntervalRef.current);
+        cameraIntervalRef.current = null;
+      }
+    };
+  }, [mode, camera, ws]);
 
   const stopCamera = useCallback(() => {
     if (cameraIntervalRef.current) {
@@ -488,6 +489,15 @@ export default function App() {
               </div>
             )}
 
+            {/* 카메라 비디오 — 항상 DOM에 존재 (ref 안정성 보장) */}
+            <video
+              ref={cameraVideoRef}
+              playsInline
+              muted
+              autoPlay
+              style={{ display: "none" }}
+            />
+
             {/* 빈 상태 */}
             {!hasData && mode === "idle" ? (
               <div
@@ -548,13 +558,11 @@ export default function App() {
                       aspectRatio: "16/10",
                     }}
                   >
-                    {/* 카메라 모드: 라이브 비디오 */}
-                    {mode === "camera" && (
-                      <video
-                        ref={cameraVideoRef}
-                        playsInline
-                        muted
-                        autoPlay
+                    {/* 서버에서 처리된 프레임 (카메라 + 영상 공통) */}
+                    {frameUrl && (
+                      <img
+                        src={frameUrl}
+                        alt="분석 프레임"
                         style={{
                           position: "absolute",
                           inset: 0,
@@ -566,42 +574,12 @@ export default function App() {
                       />
                     )}
 
-                    {/* 영상 분석 모드: 서버에서 처리된 프레임 또는 원본 미리보기 */}
-                    {mode === "video" &&
-                      (frameUrl ? (
-                        <img
-                          src={frameUrl}
-                          alt="분석 프레임"
-                          style={{
-                            position: "absolute",
-                            inset: 0,
-                            width: "100%",
-                            height: "100%",
-                            objectFit: "contain",
-                            zIndex: 1,
-                          }}
-                        />
-                      ) : videoPreviewUrl ? (
-                        <video
-                          src={videoPreviewUrl}
-                          controls
-                          muted
-                          style={{
-                            position: "absolute",
-                            inset: 0,
-                            width: "100%",
-                            height: "100%",
-                            objectFit: "contain",
-                            zIndex: 1,
-                          }}
-                        />
-                      ) : null)}
-
-                    {/* idle 모드에서 마지막 프레임 */}
-                    {mode === "idle" && frameUrl && (
-                      <img
-                        src={frameUrl}
-                        alt=""
+                    {/* 영상 업로드 후 프레임 오기 전 미리보기 */}
+                    {mode === "video" && !frameUrl && videoPreviewUrl && (
+                      <video
+                        src={videoPreviewUrl}
+                        controls
+                        muted
                         style={{
                           position: "absolute",
                           inset: 0,
@@ -611,6 +589,26 @@ export default function App() {
                           zIndex: 1,
                         }}
                       />
+                    )}
+
+                    {/* 카메라 모드에서 서버 응답 오기 전 대기 */}
+                    {mode === "camera" && !frameUrl && (
+                      <div
+                        style={{
+                          position: "absolute",
+                          inset: 0,
+                          display: "flex",
+                          flexDirection: "column",
+                          alignItems: "center",
+                          justifyContent: "center",
+                          zIndex: 1,
+                        }}
+                      >
+                        <div style={{ fontSize: 24, marginBottom: 6 }}>📷</div>
+                        <div style={{ fontSize: 11, color: C.muted }}>
+                          카메라 프레임 분석 대기 중...
+                        </div>
+                      </div>
                     )}
 
                     {/* ROI 오버레이 (항상 표시) */}
