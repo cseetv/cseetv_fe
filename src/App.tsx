@@ -254,10 +254,12 @@ export default function App() {
             {/* 메인 뷰 */}
             <div style={{ display: "grid", gridTemplateColumns: "1fr 180px", gap: 8, marginBottom: 8 }}>
               <div style={{ position: "relative", background: C.dark, borderRadius: 8, overflow: "hidden", border: `1px solid ${C.border}` }}>
-                {frameUrl ? (
+                {mode === "video" && videoPreviewUrl ? (
+                  <video src={videoPreviewUrl} controls autoPlay style={{ width: "100%", display: "block", borderRadius: 8 }} />
+                ) : frameUrl ? (
                   <img src={frameUrl} alt="" style={{ width: "100%", display: "block", borderRadius: 8 }} />
-                ) : mode === "video" && videoPreviewUrl ? (
-                  <video src={videoPreviewUrl} controls style={{ width: "100%", display: "block", borderRadius: 8 }} />
+                ) : mode === "camera" ? (
+                  <video ref={videoElRef} style={{ width: "100%", display: "block", borderRadius: 8 }} playsInline muted />
                 ) : null}
                 {/* ROI 오버레이 */}
                 {roiPolygons.map((z) => {
