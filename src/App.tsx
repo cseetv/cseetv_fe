@@ -40,6 +40,7 @@ export default function App() {
 
   // 영상 업로드
   const [videoInfo, setVideoInfo] = useState<VideoInfo | null>(null);
+  const [videoPreviewUrl, setVideoPreviewUrl] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
 
   // 카메라
@@ -111,6 +112,10 @@ export default function App() {
   // ── 영상 업로드 + 분석 시작 ──
   const handleVideoUpload = useCallback(async (file: File) => {
     try {
+      if (videoPreviewUrl) {
+        URL.revokeObjectURL(videoPreviewUrl);
+      }
+      setVideoPreviewUrl(URL.createObjectURL(file));
       setUploading(true);
       setTimeline([]);
       setAlerts([]);
@@ -132,7 +137,7 @@ export default function App() {
     } finally {
       setUploading(false);
     }
-  }, [api, ws]);
+  }, [api, ws, videoPreviewUrl]);
 
   // ── 카메라 시작 ──
   const startCamera = useCallback(async () => {
@@ -187,6 +192,12 @@ export default function App() {
     };
   }, []);
 
+  useEffect(() => {
+    return () => {
+      if (videoPreviewUrl) URL.revokeObjectURL(videoPreviewUrl);
+    };
+  }, [videoPreviewUrl]);
+
   // ── 파생 상태 ──
   const riskScore = lastResult?.motion?.risk_score || 0;
   const riskLevel = riskScore > 70 ? "danger" : riskScore > 40 ? "warn" : "safe";
@@ -219,8 +230,14 @@ export default function App() {
             {uploading && <span style={{ fontSize: 10, color: C.warn }}>업로드 중...</span>}
           </div>
 
-          {/* 카메라 비디오 (숨김, 캡처용) */}
-          <video ref={videoElRef} style={{ display: mode === "camera" ? "none" : "none" }} playsInline muted />
+          {/* 카메라 비디오 */}
+          <video
+            ref={videoElRef}
+            style={{ display: mode === "camera" ? "block" : "none", width: "100%", borderRadius: 8, marginBottom: 8 }}
+            playsInline
+            muted
+            autoPlay
+          />
 
           {/* 진행률 */}
           {progress && <div style={{ marginBottom: 8 }}><ProgressBar current={progress.current} total={progress.total} label="영상 분석 진행률" /></div>}
@@ -239,8 +256,8 @@ export default function App() {
               <div style={{ position: "relative", background: C.dark, borderRadius: 8, overflow: "hidden", border: `1px solid ${C.border}` }}>
                 {frameUrl ? (
                   <img src={frameUrl} alt="" style={{ width: "100%", display: "block", borderRadius: 8 }} />
-                ) : mode === "camera" ? (
-                  <video ref={videoElRef} style={{ width: "100%", display: "block", borderRadius: 8 }} playsInline muted />
+                ) : mode === "video" && videoPreviewUrl ? (
+                  <video src={videoPreviewUrl} controls style={{ width: "100%", display: "block", borderRadius: 8 }} />
                 ) : null}
                 {/* ROI 오버레이 */}
                 {roiPolygons.map((z) => {
