@@ -1,6 +1,5 @@
 import { useState, useRef, useCallback, useEffect, useMemo } from "react";
 import {
-  Header,
   NavBar,
   Badge,
   StatCard,
@@ -27,16 +26,29 @@ import type {
   Settings,
 } from "./types";
 
-/* ================================================================
-   cseetv v5 — 분석 완료 후 프레임 재생기 + CSV 내보내기
-   ================================================================ */
+/* ══════════════════════════════════════════
+   cseetv v6 — Light Theme + Video Playback
+   ══════════════════════════════════════════ */
 
-interface StoredFrame {
-  url: string;
-  index: number;
-  detected?: boolean;
-  riskScore?: number;
-}
+// ── 라이트 테마 ──
+const L = {
+  bg: "#F8FAFC",
+  card: "#FFFFFF",
+  border: "#E2E8F0",
+  accent: "#4F46E5",
+  accentLight: "#EEF2FF",
+  danger: "#EF4444",
+  dangerLight: "#FEE2E2",
+  success: "#22C55E",
+  successLight: "#DCFCE7",
+  warn: "#F59E0B",
+  warnLight: "#FEF3C7",
+  text: "#1E293B",
+  sub: "#475569",
+  muted: "#94A3B8",
+  dim: "#CBD5E1",
+  safe: "#22C55E",
+};
 
 const DEFAULT_SETTINGS: Settings = {
   threshold_value: 25,
@@ -75,7 +87,30 @@ function downloadCSV(data: Record<string, unknown>[], filename: string) {
   a.click();
 }
 
-/* ── 알림 모달 ── */
+// ── 카드 (밝은 테마) ──
+function LCard({
+  children,
+  style,
+  ...p
+}: React.HTMLAttributes<HTMLDivElement>) {
+  return (
+    <div
+      style={{
+        background: L.card,
+        borderRadius: 12,
+        border: `1px solid ${L.border}`,
+        padding: "12px 14px",
+        boxShadow: "0 1px 3px #0000000A",
+        ...style,
+      }}
+      {...p}
+    >
+      {children}
+    </div>
+  );
+}
+
+// ── 알림 모달 ──
 function AlertModal({
   alert: a,
   onClose,
@@ -89,23 +124,24 @@ function AlertModal({
         position: "fixed",
         inset: 0,
         zIndex: 100,
-        background: "#000C",
+        background: "#00000040",
         display: "flex",
         alignItems: "center",
         justifyContent: "center",
         padding: 16,
+        backdropFilter: "blur(4px)",
       }}
       onClick={onClose}
     >
       <div
         style={{
-          background: C.card,
-          borderRadius: 12,
-          maxWidth: 600,
+          background: "#fff",
+          borderRadius: 16,
+          maxWidth: 500,
           width: "100%",
           maxHeight: "90vh",
           overflow: "auto",
-          border: `1px solid ${C.border}`,
+          boxShadow: "0 20px 60px #00000020",
         }}
         onClick={(e) => e.stopPropagation()}
       >
@@ -113,11 +149,11 @@ function AlertModal({
           style={{
             display: "flex",
             justifyContent: "space-between",
-            padding: "12px 16px",
-            borderBottom: `1px solid ${C.border}`,
+            padding: "14px 18px",
+            borderBottom: `1px solid ${L.border}`,
           }}
         >
-          <span style={{ fontSize: 13, fontWeight: 700, color: "#F8FAFC" }}>
+          <span style={{ fontSize: 14, fontWeight: 700, color: L.text }}>
             알림 상세
           </span>
           <button
@@ -125,8 +161,8 @@ function AlertModal({
             style={{
               background: "none",
               border: "none",
-              color: C.muted,
-              fontSize: 18,
+              color: L.muted,
+              fontSize: 20,
               cursor: "pointer",
             }}
           >
@@ -141,42 +177,19 @@ function AlertModal({
           />
         )}
         <div style={{ padding: 16 }}>
-          <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
-            <Badge status={a.risk_level} />
-            <span
-              style={{ fontSize: 11, color: C.muted, fontFamily: "monospace" }}
-            >
-              {a.timestamp}
-            </span>
-          </div>
-          <div style={{ fontSize: 12, color: "#CBD5E1", marginBottom: 8 }}>
-            {a.message}
-          </div>
           <div
             style={{
-              display: "grid",
-              gridTemplateColumns: "1fr 1fr 1fr",
-              gap: 6,
+              fontSize: 13,
+              color: L.text,
+              fontWeight: 600,
+              marginBottom: 6,
             }}
           >
-            <StatCard
-              label="위험도"
-              value={a.risk_score.toFixed(1)}
-              unit=""
-              color="#EF4444"
-            />
-            <StatCard
-              label="모션 픽셀"
-              value={a.motion_pixels}
-              unit="px"
-              color={C.accent}
-            />
-            <StatCard
-              label="감지 박스"
-              value={a.boxes?.length || 0}
-              unit="개"
-              color="#F59E0B"
-            />
+            {a.message}
+          </div>
+          <div style={{ fontSize: 11, color: L.muted }}>
+            {a.timestamp} | 위험도: {a.risk_score.toFixed(1)} | 모션:{" "}
+            {a.motion_pixels}px
           </div>
         </div>
       </div>
@@ -184,7 +197,42 @@ function AlertModal({
   );
 }
 
-/* ══════════ 메인 앱 ══════════ */
+// ── 알림 토스트 (웹캠 실시간) ──
+function AlertToast({
+  message,
+  onClose,
+}: {
+  message: string;
+  onClose: () => void;
+}) {
+  useEffect(() => {
+    const t = setTimeout(onClose, 4000);
+    return () => clearTimeout(t);
+  }, [onClose]);
+  return (
+    <div
+      style={{
+        position: "fixed",
+        top: 70,
+        right: 16,
+        zIndex: 90,
+        padding: "10px 16px",
+        borderRadius: 10,
+        background: L.dangerLight,
+        border: `1px solid #FECACA`,
+        color: L.danger,
+        fontSize: 12,
+        fontWeight: 600,
+        boxShadow: "0 4px 20px #EF444420",
+        animation: "slideIn 0.3s ease",
+      }}
+    >
+      🔴 {message}
+    </div>
+  );
+}
+
+/* ══════════ 메인 ══════════ */
 export default function App() {
   const [page, setPage] = useState("dashboard");
   const [settings, setSettings] = useState<Settings>(DEFAULT_SETTINGS);
@@ -196,7 +244,6 @@ export default function App() {
   const [timeline, setTimeline] = useState<TimelinePoint[]>([]);
   const [alerts, setAlerts] = useState<AlertItem[]>([]);
   const [allResults, setAllResults] = useState<FrameResult[]>([]);
-  const [storedFrames, setStoredFrames] = useState<StoredFrame[]>([]);
   const [progress, setProgress] = useState<{
     current: number;
     total: number;
@@ -209,12 +256,12 @@ export default function App() {
   const [heatmapUrl, setHeatmapUrl] = useState<string | null>(null);
   const [mode, setMode] = useState<"idle" | "video" | "camera">("idle");
   const [selectedAlert, setSelectedAlert] = useState<AlertItem | null>(null);
+  const [toast, setToast] = useState<string | null>(null);
   const [playerResult, setPlayerResult] = useState<FrameResult | null>(null);
 
   const cameraVideoRef = useRef<HTMLVideoElement>(null);
   const cameraIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const frameUrlRef = useRef<string | null>(null);
-  const frameCountRef = useRef(0);
   const alertFrameUrls = useRef<Set<string>>(new Set());
   const camera = useCamera();
   const api = useApi();
@@ -226,49 +273,33 @@ export default function App() {
       if (t === "frame_meta" || t === "frame_result") {
         const fr = msg as unknown as FrameResult;
         setLastResult(fr);
-        setAllResults((prev) => [...prev, fr]);
-
+        setAllResults((p) => [...p, fr]);
         if (fr.frame_base64) {
           const url = `data:image/jpeg;base64,${fr.frame_base64}`;
           setFrameUrl(url);
           frameUrlRef.current = url;
-          // 분석 완료 후 재생용 프레임 저장
-          const idx = frameCountRef.current++;
-          setStoredFrames((prev) => [
-            ...prev,
-            {
-              url,
-              index: idx,
-              detected: fr.motion?.detected,
-              riskScore: fr.motion?.risk_score,
-            },
-          ]);
         }
-
         const risk = fr.motion?.risk_score || 0;
-        const motion = fr.motion?.total_motion_pixels || 0;
-        setTimeline((prev) => [...prev.slice(-199), { risk, motion }]);
-
+        setTimeline((p) => [
+          ...p.slice(-199),
+          { risk, motion: fr.motion?.total_motion_pixels || 0 },
+        ]);
         if (risk > settings.alert_threshold) {
-          const capturedFrame = fr.frame_base64
+          const cap = fr.frame_base64
             ? `data:image/jpeg;base64,${fr.frame_base64}`
             : frameUrlRef.current || undefined;
-          if (capturedFrame?.startsWith("blob:"))
-            alertFrameUrls.current.add(capturedFrame);
-          setAlerts((prev) =>
-            [
-              {
-                timestamp: new Date().toLocaleTimeString("ko-KR"),
-                risk_score: risk,
-                risk_level: fr.motion?.risk_level || "warn",
-                motion_pixels: motion,
-                boxes: fr.motion?.boxes || [],
-                message: `움직임 감지 (위험도 ${risk.toFixed(0)})`,
-                frame_base64: capturedFrame,
-              },
-              ...prev,
-            ].slice(0, 200),
-          );
+          if (cap?.startsWith("blob:")) alertFrameUrls.current.add(cap);
+          const alert: AlertItem = {
+            timestamp: new Date().toLocaleTimeString("ko-KR"),
+            risk_score: risk,
+            risk_level: fr.motion?.risk_level || "warn",
+            motion_pixels: fr.motion?.total_motion_pixels || 0,
+            boxes: fr.motion?.boxes || [],
+            message: `움직임 감지 (위험도 ${risk.toFixed(0)})`,
+            frame_base64: cap,
+          };
+          setAlerts((p) => [alert, ...p].slice(0, 200));
+          setToast(alert.message);
         }
       } else if (t === "progress") {
         setProgress({
@@ -280,8 +311,6 @@ export default function App() {
         setProgress(null);
       } else if (t === "heatmap") {
         setHeatmapUrl(`data:image/jpeg;base64,${msg.heatmap_base64}`);
-      } else if (t === "error") {
-        console.error("서버:", msg.message);
       }
     },
     [settings.alert_threshold],
@@ -290,34 +319,27 @@ export default function App() {
   const handleWsBinary = useCallback((blob: Blob) => {
     const url = URL.createObjectURL(blob);
     frameUrlRef.current = url;
-    setFrameUrl((prev) => {
-      if (prev?.startsWith("blob:") && !alertFrameUrls.current.has(prev))
-        URL.revokeObjectURL(prev);
+    setFrameUrl((p) => {
+      if (p?.startsWith("blob:") && !alertFrameUrls.current.has(p))
+        URL.revokeObjectURL(p);
       return url;
     });
-    // binary 모드에서도 프레임 저장
-    const idx = frameCountRef.current++;
-    setStoredFrames((prev) => [...prev, { url, index: idx }]);
   }, []);
 
   const ws = useWebSocket(handleWsMessage, handleWsBinary);
 
-  // ═══ 상태 초기화 ═══
   const resetState = useCallback(() => {
     setFrameUrl(null);
     setLastResult(null);
     setTimeline([]);
     setAlerts([]);
     setAllResults([]);
-    setStoredFrames([]);
     setDone(null);
     setHeatmapUrl(null);
     setProgress(null);
     setPlayerResult(null);
-    frameCountRef.current = 0;
   }, []);
 
-  // ═══ 영상 업로드 ═══
   const handleVideoUpload = useCallback(
     async (file: File) => {
       try {
@@ -335,7 +357,7 @@ export default function App() {
           include_previews: true,
         });
       } catch (e) {
-        console.error("업로드 실패:", e);
+        console.error(e);
       } finally {
         setUploading(false);
       }
@@ -354,35 +376,32 @@ export default function App() {
     });
   }, [videoInfo, ws, pendingSettings, resetState]);
 
-  // ═══ 카메라 ═══
   const startCamera = useCallback(() => {
     setMode("camera");
     resetState();
     ws.connect();
   }, [ws, resetState]);
-
   useEffect(() => {
     if (mode !== "camera") return;
     const el = cameraVideoRef.current;
     if (!el) return;
-    let cancelled = false;
+    let c = false;
     (async () => {
       await camera.start(el);
-      if (cancelled) return;
+      if (c) return;
       cameraIntervalRef.current = setInterval(async () => {
-        const blob = await camera.captureFrameAsync();
-        if (blob) ws.sendBinary(blob);
+        const b = await camera.captureFrameAsync();
+        if (b) ws.sendBinary(b);
       }, 500);
     })();
     return () => {
-      cancelled = true;
+      c = true;
       if (cameraIntervalRef.current) {
         clearInterval(cameraIntervalRef.current);
         cameraIntervalRef.current = null;
       }
     };
   }, [mode, camera, ws]);
-
   const stopCamera = useCallback(() => {
     if (cameraIntervalRef.current) {
       clearInterval(cameraIntervalRef.current);
@@ -393,7 +412,6 @@ export default function App() {
     setDone({ manual: true });
   }, [camera, ws]);
 
-  // ═══ 설정 ═══
   const changeSetting = useCallback((k: string, v: unknown) => {
     setPendingSettings((p) => ({ ...p, [k]: v }));
     setSettingsDirty(true);
@@ -419,7 +437,6 @@ export default function App() {
     [ws],
   );
 
-  // ═══ CSV 내보내기 ═══
   const exportResults = useCallback(() => {
     if (!allResults.length) return;
     downloadCSV(
@@ -430,13 +447,11 @@ export default function App() {
         motion_px: r.motion?.total_motion_pixels || 0,
         mu: r.quality?.brightness_mean || 0,
         sigma: r.quality?.brightness_std || 0,
-        entropy: r.quality?.entropy || 0,
       })),
       `cseetv_${videoInfo?.filename?.replace(/\.[^.]+$/, "") || "result"}.csv`,
     );
   }, [allResults, videoInfo]);
 
-  // cleanup
   useEffect(
     () => () => {
       if (cameraIntervalRef.current) clearInterval(cameraIntervalRef.current);
@@ -444,21 +459,17 @@ export default function App() {
     [],
   );
 
-  // derived
-  const riskScore = (playerResult || lastResult)?.motion?.risk_score || 0;
-  const displayResult = playerResult || lastResult;
-  const riskLevel =
-    riskScore > 70 ? "danger" : riskScore > 40 ? "warn" : "safe";
-  const isAnalyzing = mode !== "idle" && !done;
-  const isPlayback = done && storedFrames.length > 0 && mode !== "camera";
+  const dr = playerResult || lastResult;
+  const riskScore = dr?.motion?.risk_score || 0;
+  const isPlayback = done && videoPreviewUrl && mode === "video";
 
   const summary = useMemo(() => {
     if (!allResults.length) return null;
-    const detected = allResults.filter((r) => r.motion?.detected).length;
+    const d = allResults.filter((r) => r.motion?.detected).length;
     const risks = allResults.map((r) => r.motion?.risk_score || 0);
     return {
       total: allResults.length,
-      detected,
+      detected: d,
       avgRisk: +(risks.reduce((a, b) => a + b, 0) / risks.length).toFixed(1),
       maxRisk: +Math.max(...risks).toFixed(1),
     };
@@ -469,10 +480,10 @@ export default function App() {
     <div
       style={{
         minHeight: "100vh",
-        background: C.bg,
-        color: "#E2E8F0",
+        background: L.bg,
+        color: L.text,
         fontFamily:
-          "'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif",
+          "'Pretendard','Inter',-apple-system,BlinkMacSystemFont,sans-serif",
       }}
     >
       <video
@@ -488,6 +499,12 @@ export default function App() {
           onClose={() => setSelectedAlert(null)}
         />
       )}
+      {toast && <AlertToast message={toast} onClose={() => setToast(null)} />}
+
+      <style>{`
+        @keyframes slideIn { from { transform:translateX(100px);opacity:0 } to { transform:translateX(0);opacity:1 } }
+        @media (max-width:640px) { .grid-main { grid-template-columns:1fr !important } .grid-stats { grid-template-columns:repeat(2,1fr) !important } }
+      `}</style>
 
       {/* 헤더 */}
       <div
@@ -495,40 +512,53 @@ export default function App() {
           position: "sticky",
           top: 0,
           zIndex: 50,
-          background: C.bg + "EE",
+          background: "#ffffffEE",
           backdropFilter: "blur(12px)",
-          borderBottom: `1px solid ${C.border}`,
-          padding: "8px 12px",
+          borderBottom: `1px solid ${L.border}`,
+          padding: "10px 16px",
           display: "flex",
           justifyContent: "space-between",
           alignItems: "center",
         }}
       >
-        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-          <span style={{ fontSize: 17 }}>📹</span>
-          <span style={{ fontSize: 14, fontWeight: 800, color: "#F8FAFC" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <span style={{ fontSize: 20 }}>📹</span>
+          <span
+            style={{
+              fontSize: 16,
+              fontWeight: 800,
+              color: L.text,
+              letterSpacing: "-0.5px",
+            }}
+          >
             cseetv
           </span>
-          <Badge status={riskLevel} />
           {mode !== "idle" && (
             <span
-              style={{ fontSize: 9, color: C.dim, fontFamily: "monospace" }}
+              style={{
+                fontSize: 10,
+                color: L.muted,
+                background: L.bg,
+                padding: "2px 8px",
+                borderRadius: 99,
+              }}
             >
-              {mode === "camera" ? "LIVE" : videoInfo?.filename}
+              {mode === "camera" ? "🟢 LIVE" : videoInfo?.filename}
             </span>
           )}
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          {videoInfo && !isAnalyzing && (
+          {videoInfo && done && (
             <button
               onClick={reanalyze}
               style={{
-                padding: "4px 10px",
-                borderRadius: 6,
-                border: `1px solid ${C.border}`,
-                background: "none",
-                color: C.accent,
-                fontSize: 10,
+                padding: "6px 12px",
+                borderRadius: 8,
+                border: `1px solid ${L.border}`,
+                background: "#fff",
+                color: L.accent,
+                fontSize: 11,
+                fontWeight: 600,
                 cursor: "pointer",
               }}
             >
@@ -539,12 +569,13 @@ export default function App() {
             <button
               onClick={exportResults}
               style={{
-                padding: "4px 10px",
-                borderRadius: 6,
-                border: `1px solid ${C.border}`,
-                background: "none",
-                color: "#10B981",
-                fontSize: 10,
+                padding: "6px 12px",
+                borderRadius: 8,
+                border: `1px solid ${L.border}`,
+                background: "#fff",
+                color: L.success,
+                fontSize: 11,
+                fontWeight: 600,
                 cursor: "pointer",
               }}
             >
@@ -553,33 +584,75 @@ export default function App() {
           )}
           <div
             style={{
-              width: 6,
-              height: 6,
-              borderRadius: "50%",
+              width: 8,
+              height: 8,
+              borderRadius: 99,
               background:
                 ws.status === "connected"
-                  ? "#10B981"
+                  ? L.success
                   : ws.status === "connecting"
-                    ? "#F59E0B"
-                    : C.muted,
+                    ? L.warn
+                    : L.dim,
             }}
           />
         </div>
       </div>
 
-      <NavBar page={page} onNavigate={setPage} />
+      {/* 네비게이션 */}
+      <div
+        style={{
+          display: "flex",
+          gap: 0,
+          borderBottom: `1px solid ${L.border}`,
+          background: "#fff",
+          overflow: "auto",
+        }}
+      >
+        {[
+          { id: "dashboard", label: "📊 대시보드" },
+          { id: "roi", label: "🎯 ROI" },
+          {
+            id: "alerts",
+            label: `🔔 알림${alerts.length ? ` (${alerts.length})` : ""}`,
+          },
+          { id: "analysis", label: "📈 분석" },
+          { id: "settings", label: "⚙️ 설정" },
+        ].map((n) => (
+          <button
+            key={n.id}
+            onClick={() => setPage(n.id)}
+            style={{
+              padding: "10px 16px",
+              border: "none",
+              borderBottom:
+                page === n.id
+                  ? `2px solid ${L.accent}`
+                  : "2px solid transparent",
+              background: "transparent",
+              color: page === n.id ? L.accent : L.muted,
+              fontSize: 12,
+              fontWeight: 600,
+              cursor: "pointer",
+              whiteSpace: "nowrap",
+            }}
+          >
+            {n.label}
+          </button>
+        ))}
+      </div>
 
       <div
-        style={{ padding: "8px 12px 24px", maxWidth: 920, margin: "0 auto" }}
+        style={{ padding: "12px 16px 32px", maxWidth: 960, margin: "0 auto" }}
       >
         {/* ═══ 대시보드 ═══ */}
         {page === "dashboard" && (
           <>
+            {/* 액션 바 */}
             <div
               style={{
                 display: "flex",
-                gap: 6,
-                marginBottom: 10,
+                gap: 8,
+                marginBottom: 12,
                 flexWrap: "wrap",
                 alignItems: "center",
               }}
@@ -588,20 +661,21 @@ export default function App() {
                 style={{
                   display: "inline-flex",
                   alignItems: "center",
-                  gap: 5,
-                  padding: "7px 14px",
-                  borderRadius: 8,
-                  border: `1px solid #334155`,
-                  background: C.card,
-                  color: "#94A3B8",
-                  fontSize: 11,
+                  gap: 6,
+                  padding: "8px 16px",
+                  borderRadius: 10,
+                  border: `1px solid ${L.border}`,
+                  background: "#fff",
+                  color: L.sub,
+                  fontSize: 12,
                   cursor: "pointer",
+                  fontWeight: 500,
                 }}
               >
                 📁 영상 업로드
                 <input
                   type="file"
-                  accept="video/*,.mp4,.webm,.mov,.avi"
+                  accept="video/*"
                   onChange={(e) => {
                     const f = e.target.files?.[0];
                     if (f) handleVideoUpload(f);
@@ -613,12 +687,12 @@ export default function App() {
                 <button
                   onClick={startCamera}
                   style={{
-                    padding: "7px 14px",
-                    borderRadius: 8,
+                    padding: "8px 16px",
+                    borderRadius: 10,
                     border: "none",
-                    background: "#10B98118",
-                    color: "#10B981",
-                    fontSize: 11,
+                    background: L.successLight,
+                    color: L.success,
+                    fontSize: 12,
                     fontWeight: 700,
                     cursor: "pointer",
                   }}
@@ -629,12 +703,12 @@ export default function App() {
                 <button
                   onClick={stopCamera}
                   style={{
-                    padding: "7px 14px",
-                    borderRadius: 8,
+                    padding: "8px 16px",
+                    borderRadius: 10,
                     border: "none",
-                    background: "#EF444418",
-                    color: "#EF4444",
-                    fontSize: 11,
+                    background: L.dangerLight,
+                    color: L.danger,
+                    fontSize: 12,
                     fontWeight: 700,
                     cursor: "pointer",
                   }}
@@ -643,30 +717,32 @@ export default function App() {
                 </button>
               )}
               {uploading && (
-                <span style={{ fontSize: 10, color: "#F59E0B" }}>
+                <span style={{ fontSize: 11, color: L.warn, fontWeight: 500 }}>
                   업로드 중...
                 </span>
               )}
               {isPlayback && (
                 <span
-                  style={{ fontSize: 10, color: "#10B981", marginLeft: "auto" }}
+                  style={{
+                    fontSize: 11,
+                    color: L.success,
+                    fontWeight: 600,
+                    marginLeft: "auto",
+                  }}
                 >
-                  ✅ 분석 완료 — {storedFrames.length}프레임 재생 가능
-                </span>
-              )}
-              {isAnalyzing && (
-                <span style={{ fontSize: 9, color: C.dim, marginLeft: "auto" }}>
-                  분석 중: {allResults.length}프레임
+                  ✅ 분석 완료 — 재생 가능
                 </span>
               )}
             </div>
 
             {progress && (
-              <ProgressBar
-                current={progress.current}
-                total={progress.total}
-                label="영상 분석 진행률"
-              />
+              <div style={{ marginBottom: 12 }}>
+                <ProgressBar
+                  current={progress.current}
+                  total={progress.total}
+                  label="영상 분석"
+                />
+              </div>
             )}
 
             {/* 빈 상태 */}
@@ -677,66 +753,59 @@ export default function App() {
                   flexDirection: "column",
                   alignItems: "center",
                   justifyContent: "center",
-                  height: 300,
-                  border: `2px dashed ${C.border}`,
+                  height: 320,
+                  border: `2px dashed ${L.border}`,
                   borderRadius: 16,
-                  color: C.dim,
+                  background: "#fff",
                 }}
               >
-                <div style={{ fontSize: 44, marginBottom: 10, opacity: 0.6 }}>
+                <div style={{ fontSize: 48, marginBottom: 12, opacity: 0.4 }}>
                   📹
                 </div>
-                <div
-                  style={{ fontSize: 15, fontWeight: 600, color: "#94A3B8" }}
-                >
-                  CCTV 영상을 업로드하거나 카메라를 시작하세요
+                <div style={{ fontSize: 16, fontWeight: 600, color: L.sub }}>
+                  영상을 업로드하거나 카메라를 시작하세요
                 </div>
                 <div
                   style={{
-                    fontSize: 11,
+                    fontSize: 12,
                     marginTop: 8,
-                    color: "#475569",
+                    color: L.muted,
                     textAlign: "center",
-                    lineHeight: 1.7,
-                    maxWidth: 380,
+                    lineHeight: 1.8,
+                    maxWidth: 400,
                   }}
                 >
-                  분석 결과는 CSV로 내보내어 보고서에 활용할 수 있습니다.
+                  CDnet 데이터셋, 직접 촬영 영상, 실시간 웹캠을 지원합니다
                 </div>
               </div>
             ) : (
               <>
                 <div
+                  className="grid-main"
                   style={{
                     display: "grid",
-                    gridTemplateColumns: "1fr 190px",
-                    gap: 8,
-                    marginBottom: 10,
+                    gridTemplateColumns: "1fr 200px",
+                    gap: 10,
+                    marginBottom: 12,
                   }}
                 >
-                  {/* ── 영상 표시 영역 ── */}
+                  {/* 영상 영역 */}
                   <div>
-                    {/* 분석 완료 후: FramePlayer */}
-                    {isPlayback ? (
+                    {isPlayback && videoPreviewUrl ? (
                       <FramePlayer
-                        frames={storedFrames}
+                        videoUrl={videoPreviewUrl}
+                        results={allResults}
                         fps={2}
-                        onFrameChange={(f) => {
-                          // 재생 중인 프레임의 분석 결과를 사이드바에 반영
-                          if (f.index < allResults.length) {
-                            setPlayerResult(allResults[f.index]);
-                          }
-                        }}
+                        onTimeUpdate={(r) => setPlayerResult(r)}
                       />
                     ) : (
-                      /* 분석 중: 실시간 프레임 표시 */
                       <div
                         style={{
                           position: "relative",
                           background: "#000",
-                          borderRadius: 10,
+                          borderRadius: 12,
                           overflow: "hidden",
-                          border: `1px solid ${C.border}`,
+                          border: `1px solid ${L.border}`,
                           aspectRatio: "16/10",
                         }}
                       >
@@ -786,154 +855,186 @@ export default function App() {
                             }}
                           />
                         )}
-                        {mode === "camera" && !frameUrl && (
+                        {lastResult?.motion?.detected && (
                           <div
                             style={{
                               position: "absolute",
-                              inset: 0,
-                              display: "flex",
-                              alignItems: "center",
-                              justifyContent: "center",
-                              zIndex: 3,
+                              top: 8,
+                              left: 10,
+                              zIndex: 5,
+                              padding: "4px 10px",
+                              borderRadius: 6,
+                              background: "#EF4444DD",
+                              color: "#fff",
+                              fontSize: 11,
+                              fontWeight: 700,
                             }}
                           >
-                            <span style={{ fontSize: 11, color: C.muted }}>
-                              📷 카메라 연결 중...
-                            </span>
+                            🔴 움직임 감지
                           </div>
                         )}
-                        <div
-                          style={{
-                            position: "absolute",
-                            top: 6,
-                            left: 8,
-                            zIndex: 5,
-                            display: "flex",
-                            gap: 4,
-                          }}
-                        >
-                          {lastResult?.motion?.detected && (
-                            <Badge status="danger" text="움직임 감지" />
-                          )}
-                          {mode === "camera" && (
-                            <Badge status="safe" text="LIVE" />
-                          )}
-                        </div>
+                        {mode === "camera" && (
+                          <div
+                            style={{
+                              position: "absolute",
+                              top: 8,
+                              right: 10,
+                              zIndex: 5,
+                              padding: "4px 10px",
+                              borderRadius: 6,
+                              background: "#22C55EDD",
+                              color: "#fff",
+                              fontSize: 11,
+                              fontWeight: 700,
+                            }}
+                          >
+                            LIVE
+                          </div>
+                        )}
                       </div>
                     )}
                   </div>
-
-                  {/* 사이드 패널 */}
+                  {/* 사이드 */}
                   <div
-                    style={{ display: "flex", flexDirection: "column", gap: 6 }}
+                    style={{ display: "flex", flexDirection: "column", gap: 8 }}
                   >
-                    <Card style={{ textAlign: "center" }}>
+                    <LCard style={{ textAlign: "center" }}>
                       <div
                         style={{
-                          fontSize: 9,
-                          color: C.muted,
+                          fontSize: 10,
+                          color: L.muted,
                           textTransform: "uppercase",
+                          letterSpacing: 1,
+                          marginBottom: 4,
                         }}
                       >
                         위험도
                       </div>
-                      <RiskGauge value={riskScore} />
-                    </Card>
-                    <Card>
+                      <div
+                        style={{
+                          fontSize: 32,
+                          fontWeight: 800,
+                          color:
+                            riskScore > 70
+                              ? L.danger
+                              : riskScore > 40
+                                ? L.warn
+                                : L.success,
+                        }}
+                      >
+                        {riskScore.toFixed(0)}
+                      </div>
+                    </LCard>
+                    <LCard>
                       <Histogram
-                        hist={displayResult?.quality?.histogram ?? null}
+                        hist={dr?.quality?.histogram ?? null}
                         label="히스토그램"
-                        height={48}
+                        height={50}
                       />
                       <div
                         style={{
                           display: "flex",
-                          gap: 3,
+                          gap: 4,
                           alignItems: "center",
                           marginTop: 4,
                         }}
                       >
                         <DiagBadge
-                          diagnosis={
-                            displayResult?.quality?.diagnosis ?? "good"
-                          }
+                          diagnosis={dr?.quality?.diagnosis ?? "good"}
                         />
-                        <span style={{ fontSize: 8, color: C.dim }}>
-                          σ={displayResult?.quality?.brightness_std ?? "-"}
+                        <span style={{ fontSize: 9, color: L.muted }}>
+                          σ={dr?.quality?.brightness_std ?? "-"}
                         </span>
                       </div>
-                    </Card>
+                    </LCard>
                   </div>
                 </div>
 
-                {/* 통계 */}
+                {/* 통계 카드 */}
                 <div
+                  className="grid-stats"
                   style={{
                     display: "grid",
-                    gridTemplateColumns: "repeat(4, 1fr)",
-                    gap: 6,
-                    marginBottom: 10,
+                    gridTemplateColumns: "repeat(4,1fr)",
+                    gap: 8,
+                    marginBottom: 12,
                   }}
                 >
-                  <StatCard
-                    label="밝기 평균"
-                    value={displayResult?.quality?.brightness_mean ?? "-"}
-                    unit="μ"
-                    color={C.accent}
-                  />
-                  <StatCard
-                    label="밝기 분산"
-                    value={displayResult?.quality?.brightness_std ?? "-"}
-                    unit="σ"
-                    color="#10B981"
-                    sub={
-                      (displayResult?.quality?.brightness_std ?? 99) < 30
-                        ? "저대비⚠️"
-                        : ""
-                    }
-                  />
-                  <StatCard
-                    label="엔트로피"
-                    value={displayResult?.quality?.entropy ?? "-"}
-                    unit="bit"
-                    color="#F59E0B"
-                  />
-                  <StatCard
-                    label="모션 픽셀"
-                    value={displayResult?.motion?.total_motion_pixels ?? 0}
-                    unit="px"
-                    color={
-                      (displayResult?.motion?.total_motion_pixels ?? 0) > 1000
-                        ? "#EF4444"
-                        : C.muted
-                    }
-                  />
+                  <LCard>
+                    <div style={{ fontSize: 10, color: L.muted }}>
+                      밝기 평균
+                    </div>
+                    <div
+                      style={{ fontSize: 18, fontWeight: 700, color: L.accent }}
+                    >
+                      {dr?.quality?.brightness_mean?.toFixed(1) ?? "-"}
+                      <span style={{ fontSize: 10, color: L.muted }}> μ</span>
+                    </div>
+                  </LCard>
+                  <LCard>
+                    <div style={{ fontSize: 10, color: L.muted }}>
+                      밝기 분산
+                    </div>
+                    <div
+                      style={{
+                        fontSize: 18,
+                        fontWeight: 700,
+                        color: L.success,
+                      }}
+                    >
+                      {dr?.quality?.brightness_std?.toFixed(1) ?? "-"}
+                      <span style={{ fontSize: 10, color: L.muted }}> σ</span>
+                    </div>
+                  </LCard>
+                  <LCard>
+                    <div style={{ fontSize: 10, color: L.muted }}>엔트로피</div>
+                    <div
+                      style={{ fontSize: 18, fontWeight: 700, color: L.warn }}
+                    >
+                      {dr?.quality?.entropy?.toFixed(2) ?? "-"}
+                      <span style={{ fontSize: 10, color: L.muted }}> bit</span>
+                    </div>
+                  </LCard>
+                  <LCard>
+                    <div style={{ fontSize: 10, color: L.muted }}>
+                      모션 픽셀
+                    </div>
+                    <div
+                      style={{
+                        fontSize: 18,
+                        fontWeight: 700,
+                        color:
+                          (dr?.motion?.total_motion_pixels ?? 0) > 1000
+                            ? L.danger
+                            : L.muted,
+                      }}
+                    >
+                      {dr?.motion?.total_motion_pixels ?? 0}
+                      <span style={{ fontSize: 10, color: L.muted }}> px</span>
+                    </div>
+                  </LCard>
                 </div>
 
                 {timeline.length > 1 && (
-                  <Card style={{ marginBottom: 10 }}>
+                  <LCard style={{ marginBottom: 12 }}>
                     <div
                       style={{
                         display: "flex",
                         justifyContent: "space-between",
-                        marginBottom: 4,
+                        marginBottom: 6,
                       }}
                     >
                       <span
-                        style={{
-                          fontSize: 10,
-                          fontWeight: 600,
-                          color: "#F8FAFC",
-                        }}
+                        style={{ fontSize: 11, fontWeight: 600, color: L.text }}
                       >
                         위험도 타임라인
                       </span>
-                      <span style={{ fontSize: 9, color: C.dim }}>
+                      <span style={{ fontSize: 10, color: L.muted }}>
                         {timeline.length}프레임
                       </span>
                     </div>
                     <Timeline data={timeline.map((t) => t.risk)} />
-                  </Card>
+                  </LCard>
                 )}
               </>
             )}
@@ -943,17 +1044,10 @@ export default function App() {
         {/* ═══ ROI ═══ */}
         {page === "roi" && (
           <>
-            <div
-              style={{
-                fontSize: 14,
-                fontWeight: 700,
-                color: "#F8FAFC",
-                marginBottom: 10,
-              }}
-            >
-              관심 영역 (ROI) 설정
-            </div>
-            <Card style={{ padding: 0, overflow: "hidden", marginBottom: 10 }}>
+            <h2 style={{ fontSize: 16, fontWeight: 700, marginBottom: 12 }}>
+              관심 영역 (ROI)
+            </h2>
+            <LCard style={{ padding: 0, overflow: "hidden", marginBottom: 12 }}>
               <RoiCanvas
                 imageUrl={frameUrl}
                 width={640}
@@ -961,12 +1055,9 @@ export default function App() {
                 polygons={roiPolygons}
                 onChange={updateRoi}
               />
-            </Card>
+            </LCard>
             {roiPolygons.map((z, i) => (
-              <Card
-                key={z.id}
-                style={{ marginBottom: 6, borderColor: z.color + "33" }}
-              >
+              <LCard key={z.id} style={{ marginBottom: 6 }}>
                 <div
                   style={{
                     display: "flex",
@@ -979,15 +1070,13 @@ export default function App() {
                   >
                     <div
                       style={{
-                        width: 10,
-                        height: 10,
-                        borderRadius: 3,
+                        width: 12,
+                        height: 12,
+                        borderRadius: 4,
                         background: z.color,
                       }}
                     />
-                    <span
-                      style={{ fontSize: 12, fontWeight: 700, color: z.color }}
-                    >
+                    <span style={{ fontWeight: 700, color: z.color }}>
                       {z.name}
                     </span>
                   </div>
@@ -996,19 +1085,20 @@ export default function App() {
                       updateRoi(roiPolygons.filter((_, j) => j !== i))
                     }
                     style={{
-                      background: "#EF444412",
-                      border: "1px solid #EF444422",
+                      background: L.dangerLight,
+                      border: "none",
                       borderRadius: 6,
-                      color: "#EF4444",
+                      color: L.danger,
                       cursor: "pointer",
-                      fontSize: 10,
-                      padding: "3px 10px",
+                      fontSize: 11,
+                      padding: "4px 12px",
+                      fontWeight: 600,
                     }}
                   >
                     삭제
                   </button>
                 </div>
-              </Card>
+              </LCard>
             ))}
           </>
         )}
@@ -1021,12 +1111,10 @@ export default function App() {
                 display: "flex",
                 justifyContent: "space-between",
                 alignItems: "center",
-                marginBottom: 10,
+                marginBottom: 12,
               }}
             >
-              <div style={{ fontSize: 14, fontWeight: 700, color: "#F8FAFC" }}>
-                알림 히스토리
-              </div>
+              <h2 style={{ fontSize: 16, fontWeight: 700 }}>알림 히스토리</h2>
               <div style={{ display: "flex", gap: 6 }}>
                 {alerts.length > 0 && (
                   <button
@@ -1042,13 +1130,14 @@ export default function App() {
                       )
                     }
                     style={{
-                      fontSize: 9,
-                      padding: "4px 10px",
-                      borderRadius: 6,
-                      border: `1px solid ${C.border}`,
-                      background: "none",
-                      color: "#10B981",
+                      padding: "6px 12px",
+                      borderRadius: 8,
+                      border: `1px solid ${L.border}`,
+                      background: "#fff",
+                      color: L.success,
+                      fontSize: 11,
                       cursor: "pointer",
+                      fontWeight: 600,
                     }}
                   >
                     📥
@@ -1058,21 +1147,18 @@ export default function App() {
                   <button
                     onClick={() => setAlerts([])}
                     style={{
-                      fontSize: 9,
-                      padding: "4px 10px",
-                      borderRadius: 6,
-                      border: `1px solid ${C.border}`,
-                      background: "none",
-                      color: C.muted,
+                      padding: "6px 12px",
+                      borderRadius: 8,
+                      border: `1px solid ${L.border}`,
+                      background: "#fff",
+                      color: L.muted,
+                      fontSize: 11,
                       cursor: "pointer",
                     }}
                   >
                     초기화
                   </button>
                 )}
-                <span style={{ fontSize: 10, color: C.dim }}>
-                  {alerts.length}건
-                </span>
               </div>
             </div>
             {alerts.length === 0 ? (
@@ -1080,78 +1166,55 @@ export default function App() {
                 style={{
                   textAlign: "center",
                   padding: 50,
-                  color: C.dim,
-                  fontSize: 12,
-                  border: `1px dashed ${C.border}`,
-                  borderRadius: 10,
+                  color: L.muted,
+                  fontSize: 13,
+                  border: `2px dashed ${L.border}`,
+                  borderRadius: 12,
+                  background: "#fff",
                 }}
               >
                 위험도 {settings.alert_threshold} 이상일 때 기록됩니다
               </div>
             ) : (
-              alerts.map((a, i) => {
-                const ac =
-                  (C as Record<string, string>)[a.risk_level] || C.muted;
-                return (
-                  <div
-                    key={i}
-                    onClick={() => setSelectedAlert(a)}
-                    style={{
-                      cursor: "pointer",
-                      background: ac + "08",
-                      borderRadius: 10,
-                      border: `1px solid ${ac}18`,
-                      marginBottom: 5,
-                    }}
-                  >
-                    <div
-                      style={{ display: "flex", gap: 8, padding: "10px 12px" }}
-                    >
-                      {a.frame_base64 && (
-                        <img
-                          src={a.frame_base64}
-                          alt=""
-                          style={{
-                            width: 72,
-                            height: 48,
-                            objectFit: "cover",
-                            borderRadius: 6,
-                            flexShrink: 0,
-                          }}
-                        />
-                      )}
-                      <div style={{ flex: 1 }}>
-                        <div
-                          style={{
-                            display: "flex",
-                            justifyContent: "space-between",
-                          }}
-                        >
-                          <Badge status={a.risk_level} />
-                          <span
-                            style={{
-                              fontSize: 9,
-                              color: C.muted,
-                              fontFamily: "monospace",
-                            }}
-                          >
-                            {a.timestamp}
-                          </span>
-                        </div>
-                        <div
-                          style={{
-                            fontSize: 10,
-                            color: "#CBD5E1",
-                            marginTop: 3,
-                          }}
-                        >
-                          {a.message}
-                        </div>
+              alerts.map((a, i) => (
+                <LCard
+                  key={i}
+                  onClick={() => setSelectedAlert(a)}
+                  style={{
+                    cursor: "pointer",
+                    marginBottom: 6,
+                    borderLeft: `3px solid ${a.risk_level === "danger" ? L.danger : L.warn}`,
+                  }}
+                >
+                  <div style={{ display: "flex", gap: 10 }}>
+                    {a.frame_base64 && (
+                      <img
+                        src={a.frame_base64}
+                        alt=""
+                        style={{
+                          width: 80,
+                          height: 52,
+                          objectFit: "cover",
+                          borderRadius: 8,
+                          flexShrink: 0,
+                        }}
+                      />
+                    )}
+                    <div>
+                      <div
+                        style={{ fontSize: 12, fontWeight: 600, color: L.text }}
+                      >
+                        {a.message}
+                      </div>
+                      <div
+                        style={{ fontSize: 11, color: L.muted, marginTop: 2 }}
+                      >
+                        {a.timestamp} | 위험도: {a.risk_score.toFixed(1)}
                       </div>
                     </div>
                   </div>
-                );
-              })
+                </LCard>
+              ))
             )}
           </>
         )}
@@ -1164,22 +1227,20 @@ export default function App() {
                 display: "flex",
                 justifyContent: "space-between",
                 alignItems: "center",
-                marginBottom: 10,
+                marginBottom: 12,
               }}
             >
-              <div style={{ fontSize: 14, fontWeight: 700, color: "#F8FAFC" }}>
-                분석 결과
-              </div>
+              <h2 style={{ fontSize: 16, fontWeight: 700 }}>분석 결과</h2>
               {allResults.length > 0 && (
                 <button
                   onClick={exportResults}
                   style={{
-                    padding: "5px 14px",
-                    borderRadius: 6,
-                    border: `1px solid ${C.border}`,
-                    background: "#10B98112",
-                    color: "#10B981",
-                    fontSize: 11,
+                    padding: "6px 14px",
+                    borderRadius: 8,
+                    border: `1px solid ${L.border}`,
+                    background: L.successLight,
+                    color: L.success,
+                    fontSize: 12,
                     fontWeight: 600,
                     cursor: "pointer",
                   }}
@@ -1189,75 +1250,86 @@ export default function App() {
               )}
             </div>
             {summary ? (
-              <Card style={{ marginBottom: 10 }}>
+              <LCard style={{ marginBottom: 12 }}>
                 <div
                   style={{
-                    fontSize: 11,
+                    fontSize: 13,
                     fontWeight: 700,
-                    color: "#F8FAFC",
-                    marginBottom: 8,
+                    color: L.text,
+                    marginBottom: 10,
                   }}
                 >
-                  분석 요약 {done && "✅"}
+                  요약 {done && "✅"}
                 </div>
                 <div
+                  className="grid-stats"
                   style={{
                     display: "grid",
-                    gridTemplateColumns: "repeat(4, 1fr)",
-                    gap: 6,
+                    gridTemplateColumns: "repeat(4,1fr)",
+                    gap: 8,
                   }}
                 >
-                  <StatCard
-                    label="분석 프레임"
-                    value={summary.total}
-                    unit="장"
-                    color={C.accent}
-                  />
-                  <StatCard
-                    label="감지 횟수"
-                    value={summary.detected}
-                    unit="회"
-                    color="#EF4444"
-                  />
-                  <StatCard
-                    label="평균 위험도"
-                    value={summary.avgRisk}
-                    unit=""
-                    color="#F59E0B"
-                  />
-                  <StatCard
-                    label="최대 위험도"
-                    value={summary.maxRisk}
-                    unit=""
-                    color="#EF4444"
-                  />
+                  <div>
+                    <div style={{ fontSize: 10, color: L.muted }}>
+                      분석 프레임
+                    </div>
+                    <div
+                      style={{ fontSize: 20, fontWeight: 700, color: L.accent }}
+                    >
+                      {summary.total}
+                    </div>
+                  </div>
+                  <div>
+                    <div style={{ fontSize: 10, color: L.muted }}>
+                      감지 횟수
+                    </div>
+                    <div
+                      style={{ fontSize: 20, fontWeight: 700, color: L.danger }}
+                    >
+                      {summary.detected}
+                    </div>
+                  </div>
+                  <div>
+                    <div style={{ fontSize: 10, color: L.muted }}>
+                      평균 위험도
+                    </div>
+                    <div
+                      style={{ fontSize: 20, fontWeight: 700, color: L.warn }}
+                    >
+                      {summary.avgRisk}
+                    </div>
+                  </div>
+                  <div>
+                    <div style={{ fontSize: 10, color: L.muted }}>
+                      최대 위험도
+                    </div>
+                    <div
+                      style={{ fontSize: 20, fontWeight: 700, color: L.danger }}
+                    >
+                      {summary.maxRisk}
+                    </div>
+                  </div>
                 </div>
-              </Card>
+              </LCard>
             ) : (
               <div
                 style={{
                   textAlign: "center",
-                  padding: 30,
-                  color: C.dim,
-                  fontSize: 12,
-                  border: `1px dashed ${C.border}`,
-                  borderRadius: 10,
-                  marginBottom: 10,
+                  padding: 40,
+                  color: L.muted,
+                  fontSize: 13,
+                  border: `2px dashed ${L.border}`,
+                  borderRadius: 12,
+                  background: "#fff",
+                  marginBottom: 12,
                 }}
               >
-                영상 분석을 완료하면 결과가 표시됩니다
+                영상 분석 후 결과가 표시됩니다
               </div>
             )}
             {heatmapUrl && (
-              <Card style={{ marginBottom: 10 }}>
-                <div
-                  style={{
-                    fontSize: 11,
-                    fontWeight: 700,
-                    color: "#F8FAFC",
-                    marginBottom: 6,
-                  }}
-                >
+              <LCard style={{ marginBottom: 12 }}>
+                <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 8 }}>
                   움직임 히트맵
                 </div>
                 <img
@@ -1265,7 +1337,7 @@ export default function App() {
                   alt=""
                   style={{ width: "100%", borderRadius: 8 }}
                 />
-              </Card>
+              </LCard>
             )}
           </>
         )}
@@ -1278,27 +1350,27 @@ export default function App() {
                 display: "flex",
                 justifyContent: "space-between",
                 alignItems: "center",
-                marginBottom: 10,
+                marginBottom: 12,
               }}
             >
-              <div style={{ fontSize: 14, fontWeight: 700, color: "#F8FAFC" }}>
-                설정
-              </div>
-              <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+              <h2 style={{ fontSize: 16, fontWeight: 700 }}>설정</h2>
+              <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
                 {settingsDirty && (
-                  <span style={{ fontSize: 9, color: "#F59E0B" }}>
-                    변경사항 *
+                  <span
+                    style={{ fontSize: 10, color: L.warn, fontWeight: 600 }}
+                  >
+                    변경사항 있음
                   </span>
                 )}
                 <button
                   onClick={saveSettings}
                   style={{
-                    padding: "5px 14px",
-                    borderRadius: 6,
+                    padding: "6px 14px",
+                    borderRadius: 8,
                     border: "none",
-                    background: settingsDirty ? C.accent : C.border,
-                    color: settingsDirty ? "#fff" : C.muted,
-                    fontSize: 11,
+                    background: settingsDirty ? L.accent : "#E2E8F0",
+                    color: settingsDirty ? "#fff" : L.muted,
+                    fontSize: 12,
                     fontWeight: 700,
                     cursor: "pointer",
                   }}
@@ -1309,12 +1381,12 @@ export default function App() {
                   <button
                     onClick={reanalyze}
                     style={{
-                      padding: "5px 14px",
-                      borderRadius: 6,
+                      padding: "6px 14px",
+                      borderRadius: 8,
                       border: "none",
-                      background: "#10B98118",
-                      color: "#10B981",
-                      fontSize: 11,
+                      background: L.successLight,
+                      color: L.success,
+                      fontSize: 12,
                       fontWeight: 700,
                       cursor: "pointer",
                     }}
@@ -1356,29 +1428,27 @@ export default function App() {
                 },
               ] as const
             ).map((s) => (
-              <Card key={s.key} style={{ marginBottom: 6 }}>
+              <LCard key={s.key} style={{ marginBottom: 8 }}>
                 <div
                   style={{
                     display: "flex",
                     justifyContent: "space-between",
-                    marginBottom: 6,
+                    marginBottom: 8,
                   }}
                 >
-                  <span
-                    style={{ fontSize: 12, fontWeight: 600, color: "#F8FAFC" }}
-                  >
+                  <span style={{ fontSize: 13, fontWeight: 600 }}>
                     {s.label}
                   </span>
                   <span
                     style={{
-                      fontSize: 20,
+                      fontSize: 22,
                       fontWeight: 800,
-                      color: C.accent,
+                      color: L.accent,
                       fontFamily: "monospace",
                     }}
                   >
                     {(pendingSettings as any)[s.key]}
-                    <span style={{ fontSize: 9, color: C.muted }}>
+                    <span style={{ fontSize: 10, color: L.muted }}>
                       {s.unit}
                     </span>
                   </span>
@@ -1389,17 +1459,16 @@ export default function App() {
                   max={s.max}
                   value={(pendingSettings as any)[s.key]}
                   onChange={(e) => changeSetting(s.key, +e.target.value)}
-                  style={{ width: "100%", accentColor: C.accent }}
+                  style={{ width: "100%", accentColor: L.accent }}
                 />
-              </Card>
+              </LCard>
             ))}
             <div
               style={{
-                fontSize: 11,
+                fontSize: 12,
                 fontWeight: 600,
-                color: C.muted,
-                margin: "14px 0 8px",
-                textTransform: "uppercase",
+                color: L.muted,
+                margin: "16px 0 8px",
               }}
             >
               필터 ON/OFF
@@ -1412,7 +1481,7 @@ export default function App() {
                 { key: "use_temporal_smoothing", label: "Temporal Smoothing" },
               ] as const
             ).map((s) => (
-              <Card key={s.key} style={{ marginBottom: 4 }}>
+              <LCard key={s.key} style={{ marginBottom: 6 }}>
                 <div
                   style={{
                     display: "flex",
@@ -1420,9 +1489,7 @@ export default function App() {
                     alignItems: "center",
                   }}
                 >
-                  <span
-                    style={{ fontSize: 11, fontWeight: 600, color: "#F8FAFC" }}
-                  >
+                  <span style={{ fontSize: 12, fontWeight: 600 }}>
                     {s.label}
                   </span>
                   <button
@@ -1430,32 +1497,34 @@ export default function App() {
                       changeSetting(s.key, !(pendingSettings as any)[s.key])
                     }
                     style={{
-                      width: 38,
-                      height: 22,
-                      borderRadius: 11,
+                      width: 42,
+                      height: 24,
+                      borderRadius: 12,
                       border: "none",
                       cursor: "pointer",
                       background: (pendingSettings as any)[s.key]
-                        ? C.accent
-                        : C.border,
+                        ? L.accent
+                        : "#E2E8F0",
                       position: "relative",
+                      transition: "all 0.2s",
                     }}
                   >
                     <div
                       style={{
-                        width: 16,
-                        height: 16,
-                        borderRadius: "50%",
+                        width: 18,
+                        height: 18,
+                        borderRadius: 99,
                         background: "#fff",
                         position: "absolute",
                         top: 3,
-                        left: (pendingSettings as any)[s.key] ? 19 : 3,
+                        left: (pendingSettings as any)[s.key] ? 21 : 3,
                         transition: "left 0.2s",
+                        boxShadow: "0 1px 3px #0001",
                       }}
                     />
                   </button>
                 </div>
-              </Card>
+              </LCard>
             ))}
           </>
         )}

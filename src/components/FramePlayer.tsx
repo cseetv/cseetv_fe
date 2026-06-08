@@ -1,230 +1,168 @@
-/* 분석 완료 후 프레임 재생기
-   - 저장된 프레임을 영상처럼 재생
-   - 재생바 드래그, 10초 전후 이동, 정지/재생
-*/
+/* 분석 완료 후 영상 재생기
+   원본 영상을 <video>로 재생 + 분석 결과를 타임라인에 오버레이 */
 
 import { useState, useRef, useEffect, useCallback } from "react";
-
-interface StoredFrame {
-  url: string; // blob URL 또는 data URL
-  index: number;
-  timestamp?: number;
-  detected?: boolean;
-  riskScore?: number;
-}
+import type { FrameResult } from "../types";
 
 interface Props {
-  frames: StoredFrame[];
-  fps?: number; // 재생 속도 (기본 2fps = 분석 속도와 동일)
-  onFrameChange?: (frame: StoredFrame) => void;
+  videoUrl: string; // 원본 영상 blob URL
+  results: FrameResult[]; // 프레임별 분석 결과
+  fps?: number; // 분석 FPS (기본 2)
+  onTimeUpdate?: (result: FrameResult | null) => void;
 }
 
-const C = {
-  bg: "#020617",
-  card: "#0F172A",
-  border: "#1E293B",
-  accent: "#6366F1",
-  muted: "#64748B",
-  text: "#E2E8F0",
-};
-
-export function FramePlayer({ frames, fps = 2, onFrameChange }: Props) {
-  const [currentIdx, setCurrentIdx] = useState(0);
+export function FramePlayer({
+  videoUrl,
+  results,
+  fps = 2,
+  onTimeUpdate,
+}: Props) {
+  const videoRef = useRef<HTMLVideoElement>(null);
   const [playing, setPlaying] = useState(false);
-  const [playbackFps, setPlaybackFps] = useState(fps);
-  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const [currentTime, setCurrentTime] = useState(0);
+  const [duration, setDuration] = useState(0);
 
-  const total = frames.length;
-  const current = frames[currentIdx] || null;
+  // 현재 시간에 해당하는 분석 결과 인덱스
+  const resultIdx = Math.min(Math.floor(currentTime * fps), results.length - 1);
+  const currentResult = resultIdx >= 0 ? results[resultIdx] : null;
 
-  // 재생/정지 토글
+  // 감지된 프레임 위치 (타임라인 마커용)
+  const detectionTimes = results
+    .map((r, i) => (r.motion?.detected ? i / fps : -1))
+    .filter((t) => t >= 0);
+
+  useEffect(() => {
+    if (onTimeUpdate) onTimeUpdate(currentResult);
+  }, [resultIdx, currentResult, onTimeUpdate]);
+
   const togglePlay = useCallback(() => {
-    setPlaying((prev) => !prev);
+    const v = videoRef.current;
+    if (!v) return;
+    if (v.paused) {
+      v.play();
+      setPlaying(true);
+    } else {
+      v.pause();
+      setPlaying(false);
+    }
   }, []);
 
-  // 재생 루프
-  useEffect(() => {
-    if (!playing) {
-      if (intervalRef.current) clearInterval(intervalRef.current);
-      intervalRef.current = null;
-      return;
-    }
+  const seek = useCallback((sec: number) => {
+    const v = videoRef.current;
+    if (!v) return;
+    v.currentTime = Math.max(0, Math.min(v.duration || 0, v.currentTime + sec));
+  }, []);
 
-    intervalRef.current = setInterval(() => {
-      setCurrentIdx((prev) => {
-        const next = prev + 1;
-        if (next >= total) {
-          setPlaying(false);
-          return prev;
-        }
-        return next;
-      });
-    }, 1000 / playbackFps);
-
-    return () => {
-      if (intervalRef.current) clearInterval(intervalRef.current);
-    };
-  }, [playing, playbackFps, total]);
-
-  // 프레임 변경 콜백
-  useEffect(() => {
-    if (current && onFrameChange) {
-      onFrameChange(current);
-    }
-  }, [currentIdx, current, onFrameChange]);
-
-  // 10초 이동 (fps 기준)
-  const skip = useCallback(
-    (seconds: number) => {
-      const delta = Math.round(seconds * playbackFps);
-      setCurrentIdx((prev) => Math.max(0, Math.min(total - 1, prev + delta)));
-    },
-    [playbackFps, total],
-  );
-
-  // 시크바 클릭/드래그
   const handleSeek = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
-    setCurrentIdx(Number(e.target.value));
+    const v = videoRef.current;
+    if (!v) return;
+    v.currentTime = Number(e.target.value);
   }, []);
 
-  // 키보드
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if (e.key === " ") {
         e.preventDefault();
         togglePlay();
-      } else if (e.key === "ArrowLeft") skip(-1);
-      else if (e.key === "ArrowRight") skip(1);
+      } else if (e.key === "ArrowLeft") seek(-1);
+      else if (e.key === "ArrowRight") seek(1);
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [togglePlay, skip]);
+  }, [togglePlay, seek]);
 
-  if (total === 0) return null;
-
-  const timeStr = (idx: number) => {
-    const sec = idx / playbackFps;
-    const m = Math.floor(sec / 60);
-    const s = Math.floor(sec % 60);
-    return `${m}:${s.toString().padStart(2, "0")}`;
-  };
-
-  // 감지 위치 마커
-  const detectionMarkers = frames
-    .map((f, i) => (f.detected ? i : -1))
-    .filter((i) => i >= 0);
+  const fmt = (s: number) =>
+    `${Math.floor(s / 60)}:${Math.floor(s % 60)
+      .toString()
+      .padStart(2, "0")}`;
 
   return (
     <div
       style={{
-        background: C.card,
-        borderRadius: 10,
+        borderRadius: 12,
         overflow: "hidden",
-        border: `1px solid ${C.border}`,
+        border: "1px solid #E2E8F0",
+        background: "#fff",
       }}
     >
-      {/* 프레임 표시 */}
-      <div
-        style={{
-          position: "relative",
-          background: "#000",
-          aspectRatio: "16/10",
-        }}
-      >
-        {current && (
-          <img
-            src={current.url}
-            alt={`Frame ${current.index}`}
+      {/* 영상 */}
+      <div style={{ position: "relative", background: "#000" }}>
+        <video
+          ref={videoRef}
+          src={videoUrl}
+          style={{ width: "100%", display: "block" }}
+          onTimeUpdate={() =>
+            setCurrentTime(videoRef.current?.currentTime || 0)
+          }
+          onLoadedMetadata={() => setDuration(videoRef.current?.duration || 0)}
+          onEnded={() => setPlaying(false)}
+          playsInline
+        />
+        {/* 감지 오버레이 */}
+        {currentResult?.motion?.detected && (
+          <div
             style={{
-              width: "100%",
-              height: "100%",
-              objectFit: "contain",
-              display: "block",
+              position: "absolute",
+              top: 8,
+              left: 10,
+              padding: "4px 10px",
+              borderRadius: 6,
+              background: "#EF4444DD",
+              color: "#fff",
+              fontSize: 11,
+              fontWeight: 700,
             }}
-          />
+          >
+            🔴 움직임 감지
+          </div>
         )}
-        {/* 상태 오버레이 */}
         <div
           style={{
             position: "absolute",
-            top: 6,
-            left: 8,
-            display: "flex",
-            gap: 4,
-          }}
-        >
-          {current?.detected && (
-            <span
-              style={{
-                fontSize: 9,
-                padding: "2px 7px",
-                borderRadius: 99,
-                background: "#EF444430",
-                color: "#EF4444",
-                fontWeight: 600,
-              }}
-            >
-              움직임 감지
-            </span>
-          )}
-          {playing && (
-            <span
-              style={{
-                fontSize: 9,
-                padding: "2px 7px",
-                borderRadius: 99,
-                background: "#10B98130",
-                color: "#10B981",
-                fontWeight: 600,
-              }}
-            >
-              재생 중
-            </span>
-          )}
-        </div>
-        <div
-          style={{
-            position: "absolute",
-            bottom: 4,
-            right: 6,
-            fontSize: 9,
-            color: "#ffffff60",
+            bottom: 6,
+            right: 8,
+            fontSize: 10,
+            color: "#ffffffAA",
             fontFamily: "monospace",
             background: "#00000080",
-            padding: "1px 6px",
-            borderRadius: 3,
+            padding: "2px 8px",
+            borderRadius: 4,
           }}
         >
-          #{current?.index || 0} | 위험도: {current?.riskScore?.toFixed(0) || 0}
+          위험도: {currentResult?.motion?.risk_score?.toFixed(0) || 0} | #
+          {resultIdx}
         </div>
       </div>
 
-      {/* 시크바 */}
-      <div style={{ padding: "6px 12px", position: "relative" }}>
-        {/* 감지 마커 (시크바 위에 빨간 점) */}
-        <div style={{ position: "relative", height: 4, marginBottom: 2 }}>
-          {detectionMarkers.map((idx) => (
+      {/* 감지 마커 바 */}
+      {duration > 0 && (
+        <div style={{ height: 4, background: "#F1F5F9", position: "relative" }}>
+          {detectionTimes.map((t, i) => (
             <div
-              key={idx}
+              key={i}
               style={{
                 position: "absolute",
-                left: `${(idx / Math.max(total - 1, 1)) * 100}%`,
+                left: `${(t / duration) * 100}%`,
                 top: 0,
                 width: 2,
                 height: 4,
                 background: "#EF4444",
-                borderRadius: 1,
               }}
             />
           ))}
         </div>
+      )}
+
+      {/* 시크바 */}
+      <div style={{ padding: "4px 12px 0" }}>
         <input
           type="range"
           min={0}
-          max={total - 1}
-          value={currentIdx}
+          max={duration || 1}
+          step={0.1}
+          value={currentTime}
           onChange={handleSeek}
-          style={{ width: "100%", accentColor: C.accent, cursor: "pointer" }}
+          style={{ width: "100%", accentColor: "#4F46E5", cursor: "pointer" }}
         />
       </div>
 
@@ -234,79 +172,58 @@ export function FramePlayer({ frames, fps = 2, onFrameChange }: Props) {
           display: "flex",
           alignItems: "center",
           justifyContent: "space-between",
-          padding: "4px 12px 10px",
-          gap: 8,
+          padding: "6px 12px 10px",
         }}
       >
-        {/* 왼쪽: 재생 버튼 + 10초 이동 */}
         <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-          <button onClick={() => skip(-10)} title="10초 뒤로" style={btnStyle}>
-            ⏪
-          </button>
-          <button onClick={() => skip(-1)} title="1초 뒤로" style={btnStyle}>
-            ◀
-          </button>
+          <Btn onClick={() => seek(-10)} label="−10s" />
+          <Btn onClick={() => seek(-1)} label="−1s" />
           <button
             onClick={togglePlay}
             style={{
-              ...btnStyle,
               width: 36,
               height: 36,
+              borderRadius: 99,
+              border: "none",
+              cursor: "pointer",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
               fontSize: 16,
-              background: playing ? "#EF444420" : "#10B98120",
-              color: playing ? "#EF4444" : "#10B981",
+              background: playing ? "#FEE2E2" : "#EEF2FF",
+              color: playing ? "#EF4444" : "#4F46E5",
             }}
           >
             {playing ? "⏸" : "▶"}
           </button>
-          <button onClick={() => skip(1)} title="1초 앞으로" style={btnStyle}>
-            ▶
-          </button>
-          <button onClick={() => skip(10)} title="10초 앞으로" style={btnStyle}>
-            ⏩
-          </button>
+          <Btn onClick={() => seek(1)} label="+1s" />
+          <Btn onClick={() => seek(10)} label="+10s" />
         </div>
-
-        {/* 중앙: 시간 */}
-        <div style={{ fontSize: 11, color: C.text, fontFamily: "monospace" }}>
-          {timeStr(currentIdx)} / {timeStr(total - 1)}
-        </div>
-
-        {/* 오른쪽: 속도 */}
-        <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
-          <span style={{ fontSize: 9, color: C.muted }}>속도</span>
-          {[1, 2, 5, 10].map((s) => (
-            <button
-              key={s}
-              onClick={() => setPlaybackFps(s)}
-              style={{
-                ...btnStyle,
-                fontSize: 9,
-                padding: "2px 6px",
-                background: playbackFps === s ? C.accent + "20" : "transparent",
-                color: playbackFps === s ? C.accent : C.muted,
-                border: `1px solid ${playbackFps === s ? C.accent + "40" : C.border}`,
-              }}
-            >
-              {s}x
-            </button>
-          ))}
-        </div>
+        <span
+          style={{ fontSize: 12, color: "#64748B", fontFamily: "monospace" }}
+        >
+          {fmt(currentTime)} / {fmt(duration)}
+        </span>
       </div>
     </div>
   );
 }
 
-const btnStyle: React.CSSProperties = {
-  width: 28,
-  height: 28,
-  borderRadius: 6,
-  border: `1px solid #334155`,
-  background: "transparent",
-  color: "#94A3B8",
-  fontSize: 12,
-  cursor: "pointer",
-  display: "flex",
-  alignItems: "center",
-  justifyContent: "center",
-};
+function Btn({ onClick, label }: { onClick: () => void; label: string }) {
+  return (
+    <button
+      onClick={onClick}
+      style={{
+        padding: "4px 8px",
+        borderRadius: 6,
+        border: "1px solid #E2E8F0",
+        background: "#F8FAFC",
+        color: "#64748B",
+        fontSize: 10,
+        cursor: "pointer",
+      }}
+    >
+      {label}
+    </button>
+  );
+}
