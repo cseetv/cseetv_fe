@@ -13,6 +13,7 @@ import {
   C,
 } from "./components/ui";
 import { RoiCanvas } from "./components/RoiCanvas";
+import { FramePlayer } from "./components/FramePlayer";
 import { useWebSocket } from "./hooks/useWebSocket";
 import { useCamera } from "./hooks/useCamera";
 import { useApi } from "./hooks/useApi";
@@ -27,8 +28,15 @@ import type {
 } from "./types";
 
 /* ================================================================
-   cseetv v4 — 결과 추출 + 카메라 듀얼 레이어 + 설정 저장/재분석
+   cseetv v5 — 분석 완료 후 프레임 재생기 + CSV 내보내기
    ================================================================ */
+
+interface StoredFrame {
+  url: string;
+  index: number;
+  detected?: boolean;
+  riskScore?: number;
+}
 
 const DEFAULT_SETTINGS: Settings = {
   threshold_value: 25,
@@ -52,7 +60,6 @@ const DEFAULT_SETTINGS: Settings = {
   skip_unchanged_frames: true,
 };
 
-/* ── 결과 CSV 내보내기 ── */
 function downloadCSV(data: Record<string, unknown>[], filename: string) {
   if (!data.length) return;
   const keys = Object.keys(data[0]);
@@ -60,17 +67,17 @@ function downloadCSV(data: Record<string, unknown>[], filename: string) {
     keys.join(","),
     ...data.map((r) => keys.map((k) => JSON.stringify(r[k] ?? "")).join(",")),
   ].join("\n");
-  const blob = new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8" });
   const a = document.createElement("a");
-  a.href = URL.createObjectURL(blob);
+  a.href = URL.createObjectURL(
+    new Blob(["\uFEFF" + csv], { type: "text/csv" }),
+  );
   a.download = filename;
   a.click();
-  URL.revokeObjectURL(a.href);
 }
 
 /* ── 알림 모달 ── */
 function AlertModal({
-  alert,
+  alert: a,
   onClose,
 }: {
   alert: AlertItem;
@@ -82,7 +89,7 @@ function AlertModal({
         position: "fixed",
         inset: 0,
         zIndex: 100,
-        background: "#000000CC",
+        background: "#000C",
         display: "flex",
         alignItems: "center",
         justifyContent: "center",
@@ -126,24 +133,24 @@ function AlertModal({
             ✕
           </button>
         </div>
-        {alert.frame_base64 && (
+        {a.frame_base64 && (
           <img
-            src={alert.frame_base64}
-            alt="감지 순간"
+            src={a.frame_base64}
+            alt=""
             style={{ width: "100%", display: "block" }}
           />
         )}
         <div style={{ padding: 16 }}>
           <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
-            <Badge status={alert.risk_level} />
+            <Badge status={a.risk_level} />
             <span
               style={{ fontSize: 11, color: C.muted, fontFamily: "monospace" }}
             >
-              {alert.timestamp}
+              {a.timestamp}
             </span>
           </div>
           <div style={{ fontSize: 12, color: "#CBD5E1", marginBottom: 8 }}>
-            {alert.message}
+            {a.message}
           </div>
           <div
             style={{
@@ -154,19 +161,19 @@ function AlertModal({
           >
             <StatCard
               label="위험도"
-              value={alert.risk_score.toFixed(1)}
+              value={a.risk_score.toFixed(1)}
               unit=""
               color="#EF4444"
             />
             <StatCard
               label="모션 픽셀"
-              value={alert.motion_pixels}
+              value={a.motion_pixels}
               unit="px"
               color={C.accent}
             />
             <StatCard
               label="감지 박스"
-              value={alert.boxes?.length || 0}
+              value={a.boxes?.length || 0}
               unit="개"
               color="#F59E0B"
             />
@@ -177,11 +184,9 @@ function AlertModal({
   );
 }
 
-/* ── 메인 앱 ── */
+/* ══════════ 메인 앱 ══════════ */
 export default function App() {
   const [page, setPage] = useState("dashboard");
-
-  // ═══ 분석 엔진 상태 (페이지 전환과 독립) ═══
   const [settings, setSettings] = useState<Settings>(DEFAULT_SETTINGS);
   const [pendingSettings, setPendingSettings] =
     useState<Settings>(DEFAULT_SETTINGS);
@@ -190,7 +195,8 @@ export default function App() {
   const [lastResult, setLastResult] = useState<FrameResult | null>(null);
   const [timeline, setTimeline] = useState<TimelinePoint[]>([]);
   const [alerts, setAlerts] = useState<AlertItem[]>([]);
-  const [allResults, setAllResults] = useState<FrameResult[]>([]); // 전체 프레임 결과 저장 (CSV용)
+  const [allResults, setAllResults] = useState<FrameResult[]>([]);
+  const [storedFrames, setStoredFrames] = useState<StoredFrame[]>([]);
   const [progress, setProgress] = useState<{
     current: number;
     total: number;
@@ -203,11 +209,12 @@ export default function App() {
   const [heatmapUrl, setHeatmapUrl] = useState<string | null>(null);
   const [mode, setMode] = useState<"idle" | "video" | "camera">("idle");
   const [selectedAlert, setSelectedAlert] = useState<AlertItem | null>(null);
+  const [playerResult, setPlayerResult] = useState<FrameResult | null>(null);
 
-  // refs
   const cameraVideoRef = useRef<HTMLVideoElement>(null);
   const cameraIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const frameUrlRef = useRef<string | null>(null);
+  const frameCountRef = useRef(0);
   const alertFrameUrls = useRef<Set<string>>(new Set());
   const camera = useCamera();
   const api = useApi();
@@ -220,11 +227,28 @@ export default function App() {
         const fr = msg as unknown as FrameResult;
         setLastResult(fr);
         setAllResults((prev) => [...prev, fr]);
-        if (fr.frame_base64)
-          setFrameUrl(`data:image/jpeg;base64,${fr.frame_base64}`);
+
+        if (fr.frame_base64) {
+          const url = `data:image/jpeg;base64,${fr.frame_base64}`;
+          setFrameUrl(url);
+          frameUrlRef.current = url;
+          // 분석 완료 후 재생용 프레임 저장
+          const idx = frameCountRef.current++;
+          setStoredFrames((prev) => [
+            ...prev,
+            {
+              url,
+              index: idx,
+              detected: fr.motion?.detected,
+              riskScore: fr.motion?.risk_score,
+            },
+          ]);
+        }
+
         const risk = fr.motion?.risk_score || 0;
         const motion = fr.motion?.total_motion_pixels || 0;
         setTimeline((prev) => [...prev.slice(-199), { risk, motion }]);
+
         if (risk > settings.alert_threshold) {
           const capturedFrame = fr.frame_base64
             ? `data:image/jpeg;base64,${fr.frame_base64}`
@@ -271,22 +295,29 @@ export default function App() {
         URL.revokeObjectURL(prev);
       return url;
     });
+    // binary 모드에서도 프레임 저장
+    const idx = frameCountRef.current++;
+    setStoredFrames((prev) => [...prev, { url, index: idx }]);
   }, []);
 
   const ws = useWebSocket(handleWsMessage, handleWsBinary);
 
-  // ═══ 영상 업로드 + 분석 ═══
+  // ═══ 상태 초기화 ═══
   const resetState = useCallback(() => {
     setFrameUrl(null);
     setLastResult(null);
     setTimeline([]);
     setAlerts([]);
     setAllResults([]);
+    setStoredFrames([]);
     setDone(null);
     setHeatmapUrl(null);
     setProgress(null);
+    setPlayerResult(null);
+    frameCountRef.current = 0;
   }, []);
 
+  // ═══ 영상 업로드 ═══
   const handleVideoUpload = useCallback(
     async (file: File) => {
       try {
@@ -312,7 +343,6 @@ export default function App() {
     [api, ws, videoPreviewUrl, resetState],
   );
 
-  // ═══ 재분석 ═══
   const reanalyze = useCallback(() => {
     if (!videoInfo) return;
     resetState();
@@ -360,89 +390,68 @@ export default function App() {
     }
     camera.stop();
     ws.sendJson({ type: "stop" });
-    setMode("idle");
+    setDone({ manual: true });
   }, [camera, ws]);
 
   // ═══ 설정 ═══
-  const changeSetting = useCallback((key: string, value: unknown) => {
-    setPendingSettings((prev) => ({ ...prev, [key]: value }));
+  const changeSetting = useCallback((k: string, v: unknown) => {
+    setPendingSettings((p) => ({ ...p, [k]: v }));
     setSettingsDirty(true);
   }, []);
-
   const saveSettings = useCallback(() => {
     setSettings(pendingSettings);
     ws.sendJson({ type: "update_settings", ...pendingSettings });
     setSettingsDirty(false);
   }, [pendingSettings, ws]);
-
   const updateRoi = useCallback(
-    (polys: RoiPolygon[]) => {
-      setRoiPolygons(polys);
+    (p: RoiPolygon[]) => {
+      setRoiPolygons(p);
       if (ws.status === "connected")
         ws.sendJson({
           type: "update_roi",
-          polygons: polys.map((p) => ({
-            id: p.id,
-            name: p.name,
-            points: p.points,
+          polygons: p.map((x) => ({
+            id: x.id,
+            name: x.name,
+            points: x.points,
           })),
         });
     },
     [ws],
   );
 
-  // ═══ 결과 내보내기 ═══
+  // ═══ CSV 내보내기 ═══
   const exportResults = useCallback(() => {
     if (!allResults.length) return;
-    const rows = allResults.map((r, i) => ({
-      frame: r.frame_number || i,
-      timestamp: r.timestamp || "",
-      detected: r.motion?.detected ? 1 : 0,
-      risk_score: r.motion?.risk_score || 0,
-      motion_pixels: r.motion?.total_motion_pixels || 0,
-      boxes: r.motion?.boxes?.length || 0,
-      brightness_mean: r.quality?.brightness_mean || 0,
-      brightness_std: r.quality?.brightness_std || 0,
-      entropy: r.quality?.entropy || 0,
-      diagnosis: r.quality?.diagnosis || "",
-    }));
-    const name = videoInfo?.filename?.replace(/\.[^.]+$/, "") || "camera";
-    downloadCSV(rows, `cseetv_${name}_results.csv`);
+    downloadCSV(
+      allResults.map((r, i) => ({
+        frame: i,
+        detected: r.motion?.detected ? 1 : 0,
+        risk: r.motion?.risk_score || 0,
+        motion_px: r.motion?.total_motion_pixels || 0,
+        mu: r.quality?.brightness_mean || 0,
+        sigma: r.quality?.brightness_std || 0,
+        entropy: r.quality?.entropy || 0,
+      })),
+      `cseetv_${videoInfo?.filename?.replace(/\.[^.]+$/, "") || "result"}.csv`,
+    );
   }, [allResults, videoInfo]);
 
-  const exportAlerts = useCallback(() => {
-    if (!alerts.length) return;
-    downloadCSV(
-      alerts.map((a) => ({
-        time: a.timestamp,
-        risk: a.risk_score,
-        level: a.risk_level,
-        pixels: a.motion_pixels,
-        message: a.message,
-      })),
-      "cseetv_alerts.csv",
-    );
-  }, [alerts]);
-
   // cleanup
-  useEffect(() => {
-    return () => {
+  useEffect(
+    () => () => {
       if (cameraIntervalRef.current) clearInterval(cameraIntervalRef.current);
-    };
-  }, []);
-  useEffect(() => {
-    return () => {
-      if (videoPreviewUrl) URL.revokeObjectURL(videoPreviewUrl);
-    };
-  }, [videoPreviewUrl]);
+    },
+    [],
+  );
 
   // derived
-  const riskScore = lastResult?.motion?.risk_score || 0;
+  const riskScore = (playerResult || lastResult)?.motion?.risk_score || 0;
+  const displayResult = playerResult || lastResult;
   const riskLevel =
     riskScore > 70 ? "danger" : riskScore > 40 ? "warn" : "safe";
-  const hasData = lastResult || mode === "camera";
+  const isAnalyzing = mode !== "idle" && !done;
+  const isPlayback = done && storedFrames.length > 0 && mode !== "camera";
 
-  // ═══ 요약 통계 ═══
   const summary = useMemo(() => {
     if (!allResults.length) return null;
     const detected = allResults.filter((r) => r.motion?.detected).length;
@@ -450,18 +459,8 @@ export default function App() {
     return {
       total: allResults.length,
       detected,
-      avgRisk: risks.length
-        ? +(risks.reduce((a, b) => a + b, 0) / risks.length).toFixed(1)
-        : 0,
-      maxRisk: risks.length ? +Math.max(...risks).toFixed(1) : 0,
-      avgMu: +(
-        allResults.reduce((s, r) => s + (r.quality?.brightness_mean || 0), 0) /
-        allResults.length
-      ).toFixed(1),
-      avgSigma: +(
-        allResults.reduce((s, r) => s + (r.quality?.brightness_std || 0), 0) /
-        allResults.length
-      ).toFixed(1),
+      avgRisk: +(risks.reduce((a, b) => a + b, 0) / risks.length).toFixed(1),
+      maxRisk: +Math.max(...risks).toFixed(1),
     };
   }, [allResults]);
 
@@ -476,7 +475,6 @@ export default function App() {
           "'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif",
       }}
     >
-      {/* 숨겨진 카메라 비디오 (항상 DOM에) */}
       <video
         ref={cameraVideoRef}
         playsInline
@@ -484,8 +482,6 @@ export default function App() {
         autoPlay
         style={{ display: "none" }}
       />
-
-      {/* 알림 모달 */}
       {selectedAlert && (
         <AlertModal
           alert={selectedAlert}
@@ -523,7 +519,7 @@ export default function App() {
           )}
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          {videoInfo && mode !== "camera" && (
+          {videoInfo && !isAnalyzing && (
             <button
               onClick={reanalyze}
               style={{
@@ -568,13 +564,6 @@ export default function App() {
                     : C.muted,
             }}
           />
-          <span style={{ fontSize: 9, color: C.muted }}>
-            {ws.status === "connected"
-              ? "연결됨"
-              : ws.status === "connecting"
-                ? "연결 중"
-                : "미연결"}
-          </span>
         </div>
       </div>
 
@@ -658,24 +647,30 @@ export default function App() {
                   업로드 중...
                 </span>
               )}
-              {allResults.length > 0 && (
+              {isPlayback && (
+                <span
+                  style={{ fontSize: 10, color: "#10B981", marginLeft: "auto" }}
+                >
+                  ✅ 분석 완료 — {storedFrames.length}프레임 재생 가능
+                </span>
+              )}
+              {isAnalyzing && (
                 <span style={{ fontSize: 9, color: C.dim, marginLeft: "auto" }}>
-                  분석: {allResults.length}프레임
+                  분석 중: {allResults.length}프레임
                 </span>
               )}
             </div>
 
             {progress && (
-              <div style={{ marginBottom: 8 }}>
-                <ProgressBar
-                  current={progress.current}
-                  total={progress.total}
-                  label="영상 분석 진행률"
-                />
-              </div>
+              <ProgressBar
+                current={progress.current}
+                total={progress.total}
+                label="영상 분석 진행률"
+              />
             )}
 
-            {!hasData && mode === "idle" ? (
+            {/* 빈 상태 */}
+            {!lastResult && !isPlayback && mode === "idle" ? (
               <div
                 style={{
                   display: "flex",
@@ -706,9 +701,7 @@ export default function App() {
                     maxWidth: 380,
                   }}
                 >
-                  NightOwls 데이터셋 영상, 직접 촬영 영상, 또는 실시간 웹캠을
-                  지원합니다. 분석 결과는 CSV로 내보내어 보고서 표에 활용할 수
-                  있습니다.
+                  분석 결과는 CSV로 내보내어 보고서에 활용할 수 있습니다.
                 </div>
               </div>
             ) : (
@@ -721,117 +714,116 @@ export default function App() {
                     marginBottom: 10,
                   }}
                 >
-                  {/* 영상 디스플레이 */}
-                  <div
-                    style={{
-                      position: "relative",
-                      background: C.dark,
-                      borderRadius: 10,
-                      overflow: "hidden",
-                      border: `1px solid ${C.border}`,
-                      aspectRatio: "16/10",
-                    }}
-                  >
-                    {/* 카메라 원본 (레이어 1) */}
-                    {mode === "camera" && (
-                      <video
-                        ref={cameraVideoRef}
-                        playsInline
-                        muted
-                        autoPlay
-                        style={{
-                          position: "absolute",
-                          inset: 0,
-                          width: "100%",
-                          height: "100%",
-                          objectFit: "contain",
-                          zIndex: 1,
+                  {/* ── 영상 표시 영역 ── */}
+                  <div>
+                    {/* 분석 완료 후: FramePlayer */}
+                    {isPlayback ? (
+                      <FramePlayer
+                        frames={storedFrames}
+                        fps={2}
+                        onFrameChange={(f) => {
+                          // 재생 중인 프레임의 분석 결과를 사이드바에 반영
+                          if (f.index < allResults.length) {
+                            setPlayerResult(allResults[f.index]);
+                          }
                         }}
                       />
-                    )}
-                    {/* 서버 처리 결과 (레이어 2, 카메라 위에 겹침) */}
-                    {frameUrl && (
-                      <img
-                        src={frameUrl}
-                        alt=""
-                        style={{
-                          position: "absolute",
-                          inset: 0,
-                          width: "100%",
-                          height: "100%",
-                          objectFit: "contain",
-                          zIndex: 2,
-                          opacity: mode === "camera" ? 0.7 : 1,
-                        }}
-                      />
-                    )}
-                    {/* 영상 미리보기 (분석 시작 전) */}
-                    {mode === "video" && !frameUrl && videoPreviewUrl && (
-                      <video
-                        src={videoPreviewUrl}
-                        controls
-                        muted
-                        style={{
-                          position: "absolute",
-                          inset: 0,
-                          width: "100%",
-                          height: "100%",
-                          objectFit: "contain",
-                          zIndex: 1,
-                        }}
-                      />
-                    )}
-                    {/* 카메라 대기 */}
-                    {mode === "camera" && !frameUrl && !camera.active && (
+                    ) : (
+                      /* 분석 중: 실시간 프레임 표시 */
                       <div
                         style={{
-                          position: "absolute",
-                          inset: 0,
-                          display: "flex",
-                          alignItems: "center",
-                          justifyContent: "center",
-                          zIndex: 3,
+                          position: "relative",
+                          background: "#000",
+                          borderRadius: 10,
+                          overflow: "hidden",
+                          border: `1px solid ${C.border}`,
+                          aspectRatio: "16/10",
                         }}
                       >
-                        <span style={{ fontSize: 11, color: C.muted }}>
-                          📷 카메라 연결 중...
-                        </span>
+                        {mode === "camera" && (
+                          <video
+                            ref={cameraVideoRef}
+                            playsInline
+                            muted
+                            autoPlay
+                            style={{
+                              position: "absolute",
+                              inset: 0,
+                              width: "100%",
+                              height: "100%",
+                              objectFit: "contain",
+                              zIndex: 1,
+                            }}
+                          />
+                        )}
+                        {frameUrl && (
+                          <img
+                            src={frameUrl}
+                            alt=""
+                            style={{
+                              position: "absolute",
+                              inset: 0,
+                              width: "100%",
+                              height: "100%",
+                              objectFit: "contain",
+                              zIndex: 2,
+                              opacity: mode === "camera" ? 0.7 : 1,
+                            }}
+                          />
+                        )}
+                        {mode === "video" && !frameUrl && videoPreviewUrl && (
+                          <video
+                            src={videoPreviewUrl}
+                            controls
+                            muted
+                            style={{
+                              position: "absolute",
+                              inset: 0,
+                              width: "100%",
+                              height: "100%",
+                              objectFit: "contain",
+                              zIndex: 1,
+                            }}
+                          />
+                        )}
+                        {mode === "camera" && !frameUrl && (
+                          <div
+                            style={{
+                              position: "absolute",
+                              inset: 0,
+                              display: "flex",
+                              alignItems: "center",
+                              justifyContent: "center",
+                              zIndex: 3,
+                            }}
+                          >
+                            <span style={{ fontSize: 11, color: C.muted }}>
+                              📷 카메라 연결 중...
+                            </span>
+                          </div>
+                        )}
+                        <div
+                          style={{
+                            position: "absolute",
+                            top: 6,
+                            left: 8,
+                            zIndex: 5,
+                            display: "flex",
+                            gap: 4,
+                          }}
+                        >
+                          {lastResult?.motion?.detected && (
+                            <Badge status="danger" text="움직임 감지" />
+                          )}
+                          {mode === "camera" && (
+                            <Badge status="safe" text="LIVE" />
+                          )}
+                        </div>
                       </div>
                     )}
-                    {/* 상태 뱃지 */}
-                    <div
-                      style={{
-                        position: "absolute",
-                        top: 6,
-                        left: 8,
-                        zIndex: 5,
-                        display: "flex",
-                        gap: 4,
-                      }}
-                    >
-                      {lastResult?.motion?.detected && (
-                        <Badge status="danger" text="움직임 감지" />
-                      )}
-                      {mode === "camera" && <Badge status="safe" text="LIVE" />}
-                    </div>
-                    <div
-                      style={{
-                        position: "absolute",
-                        bottom: 4,
-                        right: 6,
-                        zIndex: 5,
-                        fontSize: 8,
-                        color: "#ffffff50",
-                        fontFamily: "monospace",
-                        background: "#00000060",
-                        padding: "1px 5px",
-                        borderRadius: 3,
-                      }}
-                    >
-                      T={settings.threshold_value} | {mode}
-                    </div>
                   </div>
-                  {/* 사이드 */}
+
+                  {/* 사이드 패널 */}
                   <div
                     style={{ display: "flex", flexDirection: "column", gap: 6 }}
                   >
@@ -849,7 +841,7 @@ export default function App() {
                     </Card>
                     <Card>
                       <Histogram
-                        hist={lastResult?.quality?.histogram ?? null}
+                        hist={displayResult?.quality?.histogram ?? null}
                         label="히스토그램"
                         height={48}
                       />
@@ -862,15 +854,19 @@ export default function App() {
                         }}
                       >
                         <DiagBadge
-                          diagnosis={lastResult?.quality?.diagnosis ?? "good"}
+                          diagnosis={
+                            displayResult?.quality?.diagnosis ?? "good"
+                          }
                         />
                         <span style={{ fontSize: 8, color: C.dim }}>
-                          σ={lastResult?.quality?.brightness_std ?? "-"}
+                          σ={displayResult?.quality?.brightness_std ?? "-"}
                         </span>
                       </div>
                     </Card>
                   </div>
                 </div>
+
+                {/* 통계 */}
                 <div
                   style={{
                     display: "grid",
@@ -881,38 +877,39 @@ export default function App() {
                 >
                   <StatCard
                     label="밝기 평균"
-                    value={lastResult?.quality?.brightness_mean ?? "-"}
+                    value={displayResult?.quality?.brightness_mean ?? "-"}
                     unit="μ"
                     color={C.accent}
                   />
                   <StatCard
                     label="밝기 분산"
-                    value={lastResult?.quality?.brightness_std ?? "-"}
+                    value={displayResult?.quality?.brightness_std ?? "-"}
                     unit="σ"
                     color="#10B981"
                     sub={
-                      (lastResult?.quality?.brightness_std ?? 99) < 30
+                      (displayResult?.quality?.brightness_std ?? 99) < 30
                         ? "저대비⚠️"
                         : ""
                     }
                   />
                   <StatCard
                     label="엔트로피"
-                    value={lastResult?.quality?.entropy ?? "-"}
+                    value={displayResult?.quality?.entropy ?? "-"}
                     unit="bit"
                     color="#F59E0B"
                   />
                   <StatCard
                     label="모션 픽셀"
-                    value={lastResult?.motion?.total_motion_pixels ?? 0}
+                    value={displayResult?.motion?.total_motion_pixels ?? 0}
                     unit="px"
                     color={
-                      (lastResult?.motion?.total_motion_pixels ?? 0) > 1000
+                      (displayResult?.motion?.total_motion_pixels ?? 0) > 1000
                         ? "#EF4444"
                         : C.muted
                     }
                   />
                 </div>
+
                 {timeline.length > 1 && (
                   <Card style={{ marginBottom: 10 }}>
                     <div
@@ -937,74 +934,6 @@ export default function App() {
                     </div>
                     <Timeline data={timeline.map((t) => t.risk)} />
                   </Card>
-                )}
-                {lastResult?.pipeline?.enhanced_previews &&
-                  lastResult.pipeline.enhanced_previews.length > 0 && (
-                    <Card style={{ marginBottom: 10 }}>
-                      <div
-                        style={{
-                          fontSize: 10,
-                          fontWeight: 600,
-                          color: "#F8FAFC",
-                          marginBottom: 6,
-                        }}
-                      >
-                        보정 파이프라인
-                      </div>
-                      <div
-                        style={{
-                          display: "grid",
-                          gridTemplateColumns: `repeat(${lastResult.pipeline.enhanced_previews.length}, 1fr)`,
-                          gap: 6,
-                        }}
-                      >
-                        {lastResult.pipeline.enhanced_previews.map((s, i) => (
-                          <div key={i} style={{ textAlign: "center" }}>
-                            <img
-                              src={`data:image/jpeg;base64,${s.base64}`}
-                              alt=""
-                              style={{
-                                width: "100%",
-                                borderRadius: 6,
-                                border: `1px solid ${C.border}`,
-                              }}
-                            />
-                            <div
-                              style={{
-                                fontSize: 9,
-                                color: C.accent,
-                                fontWeight: 600,
-                                marginTop: 4,
-                              }}
-                            >
-                              {s.step}
-                            </div>
-                            <div style={{ fontSize: 8, color: C.dim }}>
-                              σ={s.std} μ={s.mean}
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    </Card>
-                  )}
-                {lastResult?.pipeline?.steps_applied && (
-                  <div style={{ display: "flex", flexWrap: "wrap", gap: 3 }}>
-                    {lastResult.pipeline.steps_applied.map((s, i) => (
-                      <span
-                        key={i}
-                        style={{
-                          fontSize: 8,
-                          padding: "2px 6px",
-                          borderRadius: 4,
-                          background: C.accent + "12",
-                          color: C.accent,
-                          border: `1px solid ${C.accent}18`,
-                        }}
-                      >
-                        {s}
-                      </span>
-                    ))}
-                  </div>
                 )}
               </>
             )}
@@ -1033,16 +962,6 @@ export default function App() {
                 onChange={updateRoi}
               />
             </Card>
-            <div
-              style={{
-                fontSize: 10,
-                color: C.dim,
-                marginBottom: 10,
-                lineHeight: 1.6,
-              }}
-            >
-              클릭: 꼭짓점 추가 | 더블클릭: 완성 | 우클릭: 삭제
-            </div>
             {roiPolygons.map((z, i) => (
               <Card
                 key={z.id}
@@ -1070,9 +989,6 @@ export default function App() {
                       style={{ fontSize: 12, fontWeight: 700, color: z.color }}
                     >
                       {z.name}
-                    </span>
-                    <span style={{ fontSize: 9, color: C.dim }}>
-                      {z.points.length}점
                     </span>
                   </div>
                   <button
@@ -1114,7 +1030,17 @@ export default function App() {
               <div style={{ display: "flex", gap: 6 }}>
                 {alerts.length > 0 && (
                   <button
-                    onClick={exportAlerts}
+                    onClick={() =>
+                      downloadCSV(
+                        alerts.map((a) => ({
+                          time: a.timestamp,
+                          risk: a.risk_score,
+                          level: a.risk_level,
+                          pixels: a.motion_pixels,
+                        })),
+                        "alerts.csv",
+                      )
+                    }
                     style={{
                       fontSize: 9,
                       padding: "4px 10px",
@@ -1125,7 +1051,7 @@ export default function App() {
                       cursor: "pointer",
                     }}
                   >
-                    📥 CSV
+                    📥
                   </button>
                 )}
                 {alerts.length > 0 && (
@@ -1176,7 +1102,6 @@ export default function App() {
                       borderRadius: 10,
                       border: `1px solid ${ac}18`,
                       marginBottom: 5,
-                      overflow: "hidden",
                     }}
                   >
                     <div
@@ -1195,7 +1120,7 @@ export default function App() {
                           }}
                         />
                       )}
-                      <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ flex: 1 }}>
                         <div
                           style={{
                             display: "flex",
@@ -1221,12 +1146,6 @@ export default function App() {
                           }}
                         >
                           {a.message}
-                        </div>
-                        <div
-                          style={{ fontSize: 9, color: C.dim, marginTop: 1 }}
-                        >
-                          위험도: {a.risk_score.toFixed(1)} | 모션:{" "}
-                          {a.motion_pixels}px
                         </div>
                       </div>
                     </div>
@@ -1265,12 +1184,10 @@ export default function App() {
                     cursor: "pointer",
                   }}
                 >
-                  📥 전체 결과 CSV 내보내기
+                  📥 CSV 내보내기
                 </button>
               )}
             </div>
-
-            {/* 요약 통계 */}
             {summary ? (
               <Card style={{ marginBottom: 10 }}>
                 <div
@@ -1281,14 +1198,13 @@ export default function App() {
                     marginBottom: 8,
                   }}
                 >
-                  분석 요약 {done && "✅ 완료"}
+                  분석 요약 {done && "✅"}
                 </div>
                 <div
                   style={{
                     display: "grid",
-                    gridTemplateColumns: "repeat(3, 1fr)",
+                    gridTemplateColumns: "repeat(4, 1fr)",
                     gap: 6,
-                    marginBottom: 8,
                   }}
                 >
                   <StatCard
@@ -1304,24 +1220,6 @@ export default function App() {
                     color="#EF4444"
                   />
                   <StatCard
-                    label="감지율"
-                    value={
-                      summary.total > 0
-                        ? ((summary.detected / summary.total) * 100).toFixed(1)
-                        : 0
-                    }
-                    unit="%"
-                    color="#F59E0B"
-                  />
-                </div>
-                <div
-                  style={{
-                    display: "grid",
-                    gridTemplateColumns: "repeat(4, 1fr)",
-                    gap: 6,
-                  }}
-                >
-                  <StatCard
                     label="평균 위험도"
                     value={summary.avgRisk}
                     unit=""
@@ -1332,18 +1230,6 @@ export default function App() {
                     value={summary.maxRisk}
                     unit=""
                     color="#EF4444"
-                  />
-                  <StatCard
-                    label="평균 μ"
-                    value={summary.avgMu}
-                    unit=""
-                    color={C.accent}
-                  />
-                  <StatCard
-                    label="평균 σ"
-                    value={summary.avgSigma}
-                    unit=""
-                    color="#10B981"
                   />
                 </div>
               </Card>
@@ -1362,7 +1248,6 @@ export default function App() {
                 영상 분석을 완료하면 결과가 표시됩니다
               </div>
             )}
-
             {heatmapUrl && (
               <Card style={{ marginBottom: 10 }}>
                 <div
@@ -1380,123 +1265,8 @@ export default function App() {
                   alt=""
                   style={{ width: "100%", borderRadius: 8 }}
                 />
-                <div style={{ fontSize: 9, color: C.dim, marginTop: 4 }}>
-                  빨강=빈번 / 파랑=적음
-                </div>
               </Card>
             )}
-
-            {/* CSV 내보내기 안내 */}
-            <Card style={{ marginBottom: 10 }}>
-              <div
-                style={{
-                  fontSize: 11,
-                  fontWeight: 700,
-                  color: "#F8FAFC",
-                  marginBottom: 6,
-                }}
-              >
-                📊 보고서 데이터 추출
-              </div>
-              <div
-                style={{
-                  fontSize: 10,
-                  color: C.dim,
-                  lineHeight: 1.7,
-                  marginBottom: 8,
-                }}
-              >
-                상단의 "📥 CSV" 버튼으로 프레임별 분석 결과를 내보낼 수
-                있습니다. CSV에는 각 프레임의 밝기(μ), 분산(σ), 엔트로피, 움직임
-                감지 여부, 위험도, 모션 픽셀 수가 포함됩니다. 이 데이터를
-                NightOwls GT와 비교하여 Precision/Recall/F1을 계산하세요.
-              </div>
-              <div style={{ fontSize: 10, color: C.dim, lineHeight: 1.7 }}>
-                <strong style={{ color: C.accent }}>
-                  Precision/Recall/F1 계산 방법:
-                </strong>
-                <br />
-                1. CSV의 "detected" 열 = 시스템 감지 결과 (0 또는 1)
-                <br />
-                2. NightOwls GT의 프레임별 "has_motion" = 정답
-                <br />
-                3. 두 열을 비교: TP, FP, FN 계산 → Precision, Recall, F1 산출
-                <br />
-                4. 임계값(T)을 바꿔가며 반복 → 최적 T 결정
-              </div>
-            </Card>
-
-            {/* 평가 지표 가이드 */}
-            <Card>
-              <div
-                style={{
-                  fontSize: 11,
-                  fontWeight: 700,
-                  color: "#F8FAFC",
-                  marginBottom: 8,
-                }}
-              >
-                평가 지표 가이드
-              </div>
-              {(
-                [
-                  [
-                    "📊 영상 품질 (실시간)",
-                    [
-                      ["μ", "평균 밝기. <50 저조도"],
-                      ["σ", "대비. <30 저대비"],
-                      ["Entropy", "정보량. 높을수록 디테일↑"],
-                      ["Histogram", "밝기 분포 시각화"],
-                    ],
-                  ],
-                  [
-                    "🎯 감지 성능 (GT 기반)",
-                    [
-                      ["Precision", "감지 중 진짜 비율"],
-                      ["Recall", "실제 중 잡은 비율"],
-                      ["F1", "P×R 균형. ≥0.8 양호"],
-                      ["PR Curve", "T 변화에 따른 P-R 관계"],
-                    ],
-                  ],
-                ] as const
-              ).map(([title, items]) => (
-                <div key={title} style={{ marginBottom: 10 }}>
-                  <div
-                    style={{
-                      fontSize: 10,
-                      fontWeight: 600,
-                      color: C.accent,
-                      marginBottom: 5,
-                    }}
-                  >
-                    {title}
-                  </div>
-                  {items.map(([name, desc]) => (
-                    <div
-                      key={name}
-                      style={{
-                        display: "flex",
-                        gap: 8,
-                        marginBottom: 3,
-                        fontSize: 10,
-                        padding: "2px 0",
-                      }}
-                    >
-                      <span
-                        style={{
-                          color: "#F8FAFC",
-                          fontWeight: 600,
-                          minWidth: 70,
-                        }}
-                      >
-                        {name}
-                      </span>
-                      <span style={{ color: C.dim }}>{desc}</span>
-                    </div>
-                  ))}
-                </div>
-              ))}
-            </Card>
           </>
         )}
 
@@ -1517,7 +1287,7 @@ export default function App() {
               <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
                 {settingsDirty && (
                   <span style={{ fontSize: 9, color: "#F59E0B" }}>
-                    변경사항 있음 *
+                    변경사항 *
                   </span>
                 )}
                 <button
@@ -1531,7 +1301,6 @@ export default function App() {
                     fontSize: 11,
                     fontWeight: 700,
                     cursor: "pointer",
-                    transition: "all 0.2s",
                   }}
                 >
                   💾 저장
@@ -1555,13 +1324,11 @@ export default function App() {
                 )}
               </div>
             </div>
-
             {(
               [
                 {
                   key: "threshold_value",
-                  label: "움직임 감지 임계값 (T)",
-                  desc: "프레임 차이 이진화 기준",
+                  label: "임계값 (T)",
                   min: 5,
                   max: 100,
                   unit: "/255",
@@ -1569,7 +1336,6 @@ export default function App() {
                 {
                   key: "min_motion_area",
                   label: "최소 감지 영역",
-                  desc: "이 크기 미만은 노이즈로 무시",
                   min: 50,
                   max: 2000,
                   unit: "px",
@@ -1577,33 +1343,15 @@ export default function App() {
                 {
                   key: "alert_threshold",
                   label: "알림 임계값",
-                  desc: "이 위험도 이상일 때 알림",
                   min: 10,
                   max: 100,
                   unit: "/100",
                 },
                 {
                   key: "denoise_h",
-                  label: "노이즈 제거 강도 (h)",
-                  desc: "fastNlMeans h값",
+                  label: "노이즈 제거 강도",
                   min: 0,
                   max: 20,
-                  unit: "",
-                },
-                {
-                  key: "averaging_n",
-                  label: "Image Averaging N",
-                  desc: "평균할 프레임 수",
-                  min: 1,
-                  max: 20,
-                  unit: "",
-                },
-                {
-                  key: "temporal_frames",
-                  label: "Temporal Smoothing N",
-                  desc: "연속 감지 판단 수",
-                  min: 1,
-                  max: 10,
                   unit: "",
                 },
               ] as const
@@ -1616,19 +1364,12 @@ export default function App() {
                     marginBottom: 6,
                   }}
                 >
-                  <div>
-                    <div
-                      style={{
-                        fontSize: 12,
-                        fontWeight: 600,
-                        color: "#F8FAFC",
-                      }}
-                    >
-                      {s.label}
-                    </div>
-                    <div style={{ fontSize: 9, color: C.muted }}>{s.desc}</div>
-                  </div>
-                  <div
+                  <span
+                    style={{ fontSize: 12, fontWeight: 600, color: "#F8FAFC" }}
+                  >
+                    {s.label}
+                  </span>
+                  <span
                     style={{
                       fontSize: 20,
                       fontWeight: 800,
@@ -1640,7 +1381,7 @@ export default function App() {
                     <span style={{ fontSize: 9, color: C.muted }}>
                       {s.unit}
                     </span>
-                  </div>
+                  </span>
                 </div>
                 <input
                   type="range"
@@ -1652,7 +1393,6 @@ export default function App() {
                 />
               </Card>
             ))}
-
             <div
               style={{
                 fontSize: 11,
@@ -1660,7 +1400,6 @@ export default function App() {
                 color: C.muted,
                 margin: "14px 0 8px",
                 textTransform: "uppercase",
-                letterSpacing: 0.5,
               }}
             >
               필터 ON/OFF
@@ -1669,11 +1408,8 @@ export default function App() {
               [
                 { key: "use_gaussian", label: "Gaussian Blur" },
                 { key: "use_median", label: "Median Filter" },
-                { key: "use_averaging", label: "Image Averaging" },
                 { key: "use_shadow_removal", label: "Shadow Removal" },
                 { key: "use_temporal_smoothing", label: "Temporal Smoothing" },
-                { key: "use_adaptive_threshold", label: "Adaptive Threshold" },
-                { key: "use_dynamic_threshold", label: "Dynamic Threshold" },
               ] as const
             ).map((s) => (
               <Card key={s.key} style={{ marginBottom: 4 }}>
@@ -1703,7 +1439,6 @@ export default function App() {
                         ? C.accent
                         : C.border,
                       position: "relative",
-                      transition: "background 0.2s",
                     }}
                   >
                     <div
@@ -1722,26 +1457,6 @@ export default function App() {
                 </div>
               </Card>
             ))}
-
-            <div
-              style={{
-                marginTop: 14,
-                padding: "10px 12px",
-                background: "#10B98108",
-                borderRadius: 8,
-                border: "1px solid #10B98118",
-                fontSize: 10,
-                color: C.dim,
-                lineHeight: 1.6,
-              }}
-            >
-              💡 설정을 변경한 뒤{" "}
-              <strong style={{ color: "#10B981" }}>💾 저장</strong>을 누르면
-              서버에 반영됩니다. 이미 분석한 영상을 새 설정으로 다시 분석하려면{" "}
-              <strong style={{ color: "#10B981" }}>🔄 재분석</strong>을
-              누르세요. 임계값(T)을 바꿔가며 재분석하면 최적의 설정을 찾을 수
-              있습니다.
-            </div>
           </>
         )}
       </div>
