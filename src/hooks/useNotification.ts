@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 interface NotificationOptions {
   title: string;
@@ -11,7 +11,13 @@ interface NotificationOptions {
 }
 
 export const useNotification = () => {
+  const [permission, setPermission] = useState<NotificationPermission>(
+    typeof window !== "undefined" && "Notification" in window
+      ? Notification.permission
+      : "default",
+  );
   const permissionRef = useRef<NotificationPermission | null>(null);
+  const swRegistrationRef = useRef<ServiceWorkerRegistration | null>(null);
   const lastNotificationTimeRef = useRef<number>(0);
 
   // 1️⃣ 알림 권한 요청
@@ -23,22 +29,38 @@ export const useNotification = () => {
 
     if (Notification.permission === "granted") {
       permissionRef.current = "granted";
+      setPermission("granted");
       return true;
     }
 
     if (Notification.permission === "denied") {
       console.warn("알림 권한이 거부되었습니다.");
+      setPermission("denied");
       return false;
     }
 
     // 권한 요청
     try {
-      const permission = await Notification.requestPermission();
-      permissionRef.current = permission;
-      return permission === "granted";
+      const grantedPermission = await Notification.requestPermission();
+      permissionRef.current = grantedPermission;
+      setPermission(grantedPermission);
+      return grantedPermission === "granted";
     } catch (err) {
       console.error("알림 권한 요청 중 오류:", err);
       return false;
+    }
+  }, []);
+
+  const registerServiceWorker = useCallback(async (): Promise<void> => {
+    if (!("serviceWorker" in navigator)) return;
+
+    try {
+      const registration = await navigator.serviceWorker.register(
+        "/notification-sw.js",
+      );
+      swRegistrationRef.current = registration;
+    } catch (err) {
+      console.warn("Service Worker 등록 실패:", err);
     }
   }, []);
 
@@ -90,46 +112,62 @@ export const useNotification = () => {
   // 5️⃣ 알림 전송
   const notify = useCallback(
     async (options: NotificationOptions): Promise<void> => {
-      // 권한 확인
-      if (!permissionRef.current) {
+      if (!("Notification" in window)) {
+        console.warn("이 브라우저는 알림을 지원하지 않습니다.");
+        return;
+      }
+
+      if (Notification.permission !== "granted") {
         const hasPermission = await requestPermission();
         if (!hasPermission) return;
       }
 
-      // 중복 알림 방지
       if (!canSendNotification(options.tag)) return;
 
+      const notificationOptions: NotificationOptions & {
+        requireInteraction: boolean;
+      } = {
+        body: options.body,
+        tag: options.tag || "default",
+        icon: options.icon,
+        badge: options.badge,
+        requireInteraction: true,
+        silent: !options.sound,
+        vibrate: options.vibrate ? [200, 100, 200] : undefined,
+      };
+
       try {
-        // 브라우저 알림
-        const notification = new Notification(options.title, {
-          body: options.body,
-          tag: options.tag || "default",
-          icon: options.icon,
-          badge: options.badge,
-          requireInteraction: true, // 사용자가 닫을 때까지 유지
-          silent: !options.sound,
-        });
+        const useServiceWorker =
+          swRegistrationRef.current !== null &&
+          document.visibilityState !== "visible";
 
-        // 알림 클릭 시 창 포커스
-        notification.onclick = () => {
-          window.focus();
-          notification.close();
-        };
-
-        // 소리 및 진동
-        if (options.sound) playAlertSound();
-        if (options.vibrate) vibrate();
-
-        // Service Worker 알림 시도 (오프라인 모드)
-        if ("serviceWorker" in navigator) {
-          const registration = await navigator.serviceWorker.ready;
-          registration.showNotification(options.title, {
+        if (useServiceWorker) {
+          swRegistrationRef.current?.showNotification(options.title, {
             body: options.body,
             tag: options.tag || "default",
             icon: options.icon,
+            badge: options.badge,
             requireInteraction: true,
+            vibrate: options.vibrate ? [200, 100, 200] : undefined,
           });
+        } else {
+          const notification = new Notification(options.title, {
+            body: options.body,
+            tag: options.tag || "default",
+            icon: options.icon,
+            badge: options.badge,
+            requireInteraction: true,
+            silent: !options.sound,
+          });
+
+          notification.onclick = () => {
+            window.focus();
+            notification.close();
+          };
         }
+
+        if (options.sound) playAlertSound();
+        if (options.vibrate) vibrate();
       } catch (err) {
         console.error("알림 전송 오류:", err);
       }
@@ -159,17 +197,19 @@ export const useNotification = () => {
     [notify],
   );
 
-  // 초기화: 페이지 로드 시 권한 확인
+  // 초기화: 페이지 로드 시 권한 확인 및 서비스 워커 등록
   useEffect(() => {
-    if ("Notification" in window && Notification.permission === "granted") {
-      permissionRef.current = "granted";
+    if ("Notification" in window) {
+      permissionRef.current = Notification.permission;
+      setPermission(Notification.permission);
     }
-  }, []);
+    registerServiceWorker();
+  }, [registerServiceWorker]);
 
   return {
     requestPermission,
     notify,
     notifyDanger,
-    hasPermission: permissionRef.current === "granted",
+    hasPermission: permission === "granted",
   };
 };
