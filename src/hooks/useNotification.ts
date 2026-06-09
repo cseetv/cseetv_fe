@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
-interface NotificationOptions {
+interface AppNotificationOptions {
   title: string;
   body: string;
   tag?: string; // 같은 tag면 기존 알림 대체 (복수 알림 방지)
@@ -111,7 +111,7 @@ export const useNotification = () => {
 
   // 5️⃣ 알림 전송
   const notify = useCallback(
-    async (options: NotificationOptions): Promise<void> => {
+    async (options: AppNotificationOptions): Promise<void> => {
       if (!("Notification" in window)) {
         console.warn("이 브라우저는 알림을 지원하지 않습니다.");
         return;
@@ -124,17 +124,14 @@ export const useNotification = () => {
 
       if (!canSendNotification(options.tag)) return;
 
-      const notificationOptions: NotificationOptions & {
-        requireInteraction: boolean;
-      } = {
+      const notificationPayload = {
         body: options.body,
         tag: options.tag || "default",
         icon: options.icon,
         badge: options.badge,
         requireInteraction: true,
         silent: !options.sound,
-        vibrate: options.vibrate ? [200, 100, 200] : undefined,
-      };
+      } as NotificationOptions;
 
       try {
         const useServiceWorker =
@@ -142,24 +139,19 @@ export const useNotification = () => {
           document.visibilityState !== "visible";
 
         if (useServiceWorker) {
-          swRegistrationRef.current?.showNotification(options.title, {
-            body: options.body,
-            tag: options.tag || "default",
-            icon: options.icon,
-            badge: options.badge,
-            requireInteraction: true,
+          const notificationOptions = {
+            ...notificationPayload,
             vibrate: options.vibrate ? [200, 100, 200] : undefined,
-          });
+          } as any;
+          swRegistrationRef.current?.showNotification(
+            options.title,
+            notificationOptions,
+          );
         } else {
-          const notification = new Notification(options.title, {
-            body: options.body,
-            tag: options.tag || "default",
-            icon: options.icon,
-            badge: options.badge,
-            requireInteraction: true,
-            silent: !options.sound,
-          });
-
+          const notification = new Notification(
+            options.title,
+            notificationPayload,
+          );
           notification.onclick = () => {
             window.focus();
             notification.close();
