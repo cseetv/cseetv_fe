@@ -547,7 +547,12 @@ export default function App() {
       <style>{`
         @keyframes slideIn{from{transform:translateX(100px);opacity:0}to{transform:translateX(0);opacity:1}}
         @keyframes pulse{0%,100%{opacity:1}50%{opacity:.6}}
-        @media(max-width:640px){.gm{grid-template-columns:1fr!important}.gs{grid-template-columns:repeat(2,1fr)!important}}
+        @media(max-width:640px){
+          .gm{grid-template-columns:1fr!important}
+          .gs{grid-template-columns:repeat(2,1fr)!important}
+          .header-btn-text{display:none}
+          .header-btn{padding:4px 6px!important;font-size:10px!important}
+        }
       `}</style>
 
       {/* 헤더 */}
@@ -590,6 +595,7 @@ export default function App() {
           {videoInfo && done && (
             <button
               onClick={reanalyze}
+              className="header-btn"
               style={{
                 padding: "6px 12px",
                 borderRadius: 8,
@@ -600,13 +606,15 @@ export default function App() {
                 fontWeight: 600,
                 cursor: "pointer",
               }}
+              title="재분석"
             >
-              🔄 재분석
+              <span className="header-btn-text">🔄 </span>재분석
             </button>
           )}
           {allResults.length > 0 && (
             <button
               onClick={exportResults}
+              className="header-btn"
               style={{
                 padding: "6px 12px",
                 borderRadius: 8,
@@ -617,12 +625,14 @@ export default function App() {
                 fontWeight: 600,
                 cursor: "pointer",
               }}
+              title="CSV 다운로드"
             >
-              📥 CSV
+              <span className="header-btn-text">📥 </span>CSV
             </button>
           )}
           <button
             onClick={requestPermission}
+            className="header-btn"
             style={{
               padding: "6px 12px",
               borderRadius: 8,
@@ -635,7 +645,11 @@ export default function App() {
             }}
             title={hasPermission ? "알림 권한 허용됨" : "알림 권한 요청"}
           >
-            {hasPermission ? "🔔 알림 ✓" : "🔔 알림 요청"}
+            <span className="header-btn-text">
+              {hasPermission ? "🔔 알림 ✓" : "🔔 알림 요청"}
+            </span>
+            {!hasPermission && "🔔"}
+            {hasPermission && <span className="header-btn-text">✓</span>}
           </button>
           <div
             style={{
