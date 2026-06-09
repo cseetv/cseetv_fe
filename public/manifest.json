@@ -1,0 +1,23 @@
+{
+  "name": "cseetv",
+  "short_name": "cseetv",
+  "description": "CCTV 모니터링 PWA",
+  "start_url": ".",
+  "display": "standalone",
+  "background_color": "#F8FAFC",
+  "theme_color": "#4F46E5",
+  "icons": [
+    {
+      "src": "/favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/apple-touch-icon.svg",
+      "sizes": "192x192",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

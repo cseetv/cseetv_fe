@@ -10,12 +10,30 @@ interface AppNotificationOptions {
   vibrate?: boolean; // 진동 여부 (모바일)
 }
 
+const PUSH_SUBSCRIBE_URL = import.meta.env.VITE_PUSH_SUBSCRIBE_URL || "";
+const PUSH_PUBLIC_KEY_URL = import.meta.env.VITE_PUSH_PUBLIC_KEY_URL || "http://localhost:8000/push/public_key";
+
+function urlBase64ToUint8Array(base64String: string) {
+  const padding = "=".repeat((4 - (base64String.length % 4)) % 4);
+  const base64 = (base64String + padding).replace(/-/g, "+").replace(/_/g, "/");
+  const rawData = window.atob(base64);
+  const outputArray = new Uint8Array(rawData.length);
+  for (let i = 0; i < rawData.length; ++i) {
+    outputArray[i] = rawData.charCodeAt(i);
+  }
+  return outputArray;
+}
+
 export const useNotification = () => {
   const [permission, setPermission] = useState<NotificationPermission>(
     typeof window !== "undefined" && "Notification" in window
       ? Notification.permission
       : "default",
   );
+  const [pushSubscription, setPushSubscription] = useState<PushSubscription | null>(
+    null,
+  );
+  const [pushSupported, setPushSupported] = useState(false);
   const permissionRef = useRef<NotificationPermission | null>(null);
   const swRegistrationRef = useRef<ServiceWorkerRegistration | null>(null);
   const lastNotificationTimeRef = useRef<number>(0);
@@ -39,7 +57,6 @@ export const useNotification = () => {
       return false;
     }
 
-    // 권한 요청
     try {
       const grantedPermission = await Notification.requestPermission();
       permissionRef.current = grantedPermission;
@@ -51,18 +68,95 @@ export const useNotification = () => {
     }
   }, []);
 
-  const registerServiceWorker = useCallback(async (): Promise<void> => {
-    if (!("serviceWorker" in navigator)) return;
+  const registerServiceWorker = useCallback(async (): Promise<ServiceWorkerRegistration | null> => {
+    if (!("serviceWorker" in navigator)) return null;
 
     try {
-      const registration = await navigator.serviceWorker.register(
-        "/notification-sw.js",
-      );
+      const registration = await navigator.serviceWorker.register("/sw.js");
       swRegistrationRef.current = registration;
+      return registration;
     } catch (err) {
       console.warn("Service Worker 등록 실패:", err);
+      return null;
     }
   }, []);
+
+  const ensureServiceWorker = useCallback(async () => {
+    if (swRegistrationRef.current) return swRegistrationRef.current;
+    return await registerServiceWorker();
+  }, [registerServiceWorker]);
+
+  const sendSubscriptionToServer = useCallback(
+    async (subscription: PushSubscription) => {
+      if (!PUSH_SUBSCRIBE_URL) {
+        console.info(
+          "Push subscription ready. Set VITE_PUSH_SUBSCRIBE_URL to send it to your server.",
+          subscription,
+        );
+        return;
+      }
+
+      try {
+        await fetch(PUSH_SUBSCRIBE_URL, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(subscription),
+        });
+      } catch (err) {
+        console.warn("푸시 구독 정보 전송 실패:", err);
+      }
+    },
+    [],
+  );
+
+  const subscribePush = useCallback(async (): Promise<PushSubscription | null> => {
+    if (!("serviceWorker" in navigator) || !("PushManager" in window)) {
+      console.warn("이 브라우저는 푸시를 지원하지 않습니다.");
+      return null;
+    }
+
+    const granted = await requestPermission();
+    if (!granted) return null;
+
+    const registration = await ensureServiceWorker();
+    if (!registration) return null;
+
+    try {
+      const existing = await registration.pushManager.getSubscription();
+      if (existing) {
+        setPushSubscription(existing);
+        return existing;
+      }
+
+      // 백엔드에서 공개 키 동적으로 받기
+      let vapidPublicKey: string;
+      try {
+        const response = await fetch(PUSH_PUBLIC_KEY_URL);
+        if (!response.ok) throw new Error("공개 키 조회 실패");
+        const data = await response.json();
+        vapidPublicKey = data.vapidPublicKey;
+      } catch (err) {
+        console.error("공개 키 조회 실패:", err);
+        return null;
+      }
+
+      if (!vapidPublicKey) {
+        console.warn("VAPID 공개 키를 받지 못했습니다.");
+        return null;
+      }
+
+      const subscription = await registration.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: urlBase64ToUint8Array(vapidPublicKey),
+      });
+      setPushSubscription(subscription);
+      await sendSubscriptionToServer(subscription);
+      return subscription;
+    } catch (err) {
+      console.warn("푸시 구독 실패:", err);
+      return null;
+    }
+  }, [ensureServiceWorker, requestPermission, sendSubscriptionToServer]);
 
   // 2️⃣ 알림 중복 방지 (debounce - 2초 이내 같은 tag 알림 무시)
   const canSendNotification = useCallback((tag?: string): boolean => {
@@ -76,7 +170,6 @@ export const useNotification = () => {
   // 3️⃣ 소리 재생 함수
   const playAlertSound = useCallback(() => {
     try {
-      // 브라우저 기본 beep 음성 생성
       const audioContext = new (
         window.AudioContext || (window as any).webkitAudioContext
       )();
@@ -86,7 +179,6 @@ export const useNotification = () => {
       oscillator.connect(gainNode);
       gainNode.connect(audioContext.destination);
 
-      // 경보음 (800Hz, 200ms)
       oscillator.frequency.value = 800;
       oscillator.type = "sine";
       gainNode.gain.setValueAtTime(0.3, audioContext.currentTime);
@@ -105,7 +197,7 @@ export const useNotification = () => {
   // 4️⃣ 진동 함수 (모바일)
   const vibrate = useCallback(() => {
     if ("vibrate" in navigator) {
-      navigator.vibrate([200, 100, 200]); // 진동 패턴: 200ms, 100ms 휴식, 200ms
+      navigator.vibrate([200, 100, 200]);
     }
   }, []);
 
@@ -131,7 +223,7 @@ export const useNotification = () => {
         badge: options.badge,
         requireInteraction: true,
         silent: !options.sound,
-      } as NotificationOptions;
+      } as any;
 
       try {
         const useServiceWorker =
@@ -148,10 +240,7 @@ export const useNotification = () => {
             notificationOptions,
           );
         } else {
-          const notification = new Notification(
-            options.title,
-            notificationPayload,
-          );
+          const notification = new Notification(options.title, notificationPayload);
           notification.onclick = () => {
             window.focus();
             notification.close();
@@ -189,8 +278,14 @@ export const useNotification = () => {
     [notify],
   );
 
-  // 초기화: 페이지 로드 시 권한 확인 및 서비스 워커 등록
   useEffect(() => {
+    setPushSupported(
+      typeof window !== "undefined" &&
+        "serviceWorker" in navigator &&
+        "PushManager" in window &&
+        "Notification" in window,
+    );
+
     if ("Notification" in window) {
       permissionRef.current = Notification.permission;
       setPermission(Notification.permission);
@@ -202,6 +297,9 @@ export const useNotification = () => {
     requestPermission,
     notify,
     notifyDanger,
+    subscribePush,
     hasPermission: permission === "granted",
+    hasPushSupport: pushSupported,
+    pushSubscription,
   };
 };

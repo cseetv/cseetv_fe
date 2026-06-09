@@ -300,7 +300,14 @@ export default function App() {
   const alertFrameUrls = useRef<Set<string>>(new Set());
   const frameCountRef = useRef(0);
   const api = useApi();
-  const { notifyDanger, requestPermission, hasPermission } = useNotification();
+  const {
+    notifyDanger,
+    requestPermission,
+    hasPermission,
+    hasPushSupport,
+    pushSubscription,
+    subscribePush,
+  } = useNotification();
 
   // ═══ WebSocket ═══
   const handleWsMessage = useCallback(
@@ -353,6 +360,7 @@ export default function App() {
 
           setAlerts((p) => [alert, ...p].slice(0, 300));
           setToast({ msg: alert.message, type: "danger" });
+          setSelectedAlert(alert);
         }
       } else if (t === "progress") {
         setProgress({
@@ -663,6 +671,28 @@ export default function App() {
             {!hasPermission && "🔔"}
             {hasPermission && <span className="header-btn-text">✓</span>}
           </button>
+          {hasPushSupport && (
+            <button
+              onClick={subscribePush}
+              className="header-btn"
+              style={{
+                padding: "6px 12px",
+                borderRadius: 8,
+                border: `1px solid ${L.border}`,
+                background: pushSubscription ? L.successLight : "#fff",
+                color: pushSubscription ? L.success : L.muted,
+                fontSize: 11,
+                fontWeight: 600,
+                cursor: "pointer",
+              }}
+              title={pushSubscription ? "웹 푸시 구독됨" : "웹 푸시 구독"}
+            >
+              <span className="header-btn-text">
+                {pushSubscription ? "✅ 푸시 구독됨" : "📲 푸시 구독"}
+              </span>
+              {!pushSubscription && "📲"}
+            </button>
+          )}
           <div
             style={{
               width: 8,
