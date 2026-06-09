@@ -13,6 +13,7 @@ import {
 } from "./components/ui";
 import { RoiCanvas } from "./components/RoiCanvas";
 import { FramePlayer } from "./components/FramePlayer";
+import { CameraView, type CameraViewHandle } from "./components/CameraView";
 import { useWebSocket } from "./hooks/useWebSocket";
 import { useCamera } from "./hooks/useCamera";
 import { useApi } from "./hooks/useApi";
@@ -114,9 +115,11 @@ function LCard({
 function AlertModal({
   alert: a,
   onClose,
+  mode: sourceMode,
 }: {
   alert: AlertItem;
   onClose: () => void;
+  mode: string;
 }) {
   return (
     <div
@@ -179,17 +182,48 @@ function AlertModal({
         <div style={{ padding: 16 }}>
           <div
             style={{
-              fontSize: 13,
+              fontSize: 14,
               color: L.text,
-              fontWeight: 600,
-              marginBottom: 6,
+              fontWeight: 700,
+              marginBottom: 8,
             }}
           >
             {a.message}
           </div>
-          <div style={{ fontSize: 11, color: L.muted }}>
-            {a.timestamp} | 위험도: {a.risk_score.toFixed(1)} | 모션:{" "}
-            {a.motion_pixels}px
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "1fr 1fr",
+              gap: 8,
+              fontSize: 12,
+              color: L.sub,
+              marginBottom: 8,
+            }}
+          >
+            <div>
+              🕐{" "}
+              <strong>
+                {sourceMode === "camera" ? "감지 시각" : "영상 시점"}
+              </strong>
+              : {a.timestamp}
+            </div>
+            <div>
+              📹 <strong>소스</strong>:{" "}
+              {sourceMode === "camera" ? "실시간 웹캠" : "업로드 영상"}
+            </div>
+            <div>
+              ⚠️ <strong>위험도</strong>: {a.risk_score.toFixed(1)}
+            </div>
+            <div>
+              📊 <strong>모션</strong>: {a.motion_pixels.toLocaleString()}px
+            </div>
+            <div>
+              📦 <strong>감지 영역</strong>: {a.boxes?.length || 0}개
+            </div>
+            <div>
+              🏷 <strong>등급</strong>:{" "}
+              {a.risk_level === "danger" ? "위험" : "주의"}
+            </div>
           </div>
         </div>
       </div>
@@ -260,9 +294,11 @@ export default function App() {
   const [playerResult, setPlayerResult] = useState<FrameResult | null>(null);
 
   const cameraVideoRef = useRef<HTMLVideoElement>(null);
+  const cameraViewRef = useRef<CameraViewHandle>(null);
   const cameraIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const frameUrlRef = useRef<string | null>(null);
   const alertFrameUrls = useRef<Set<string>>(new Set());
+  const [isRecording, setIsRecording] = useState(false);
   const camera = useCamera();
   const api = useApi();
 
@@ -383,19 +419,29 @@ export default function App() {
   }, [ws, resetState]);
   useEffect(() => {
     if (mode !== "camera") return;
-    const el = cameraVideoRef.current;
-    if (!el) return;
-    let c = false;
-    (async () => {
-      await camera.start(el);
-      if (c) return;
-      cameraIntervalRef.current = setInterval(async () => {
-        const b = await camera.captureFrameAsync();
-        if (b) ws.sendBinary(b);
-      }, 500);
-    })();
+    // CameraView가 렌더링된 후 video 요소를 가져옴
+    const tryStart = () => {
+      const el = cameraViewRef.current?.getVideo();
+      if (!el) {
+        setTimeout(tryStart, 200);
+        return;
+      }
+      let c = false;
+      (async () => {
+        await camera.start(el);
+        if (c) return;
+        cameraIntervalRef.current = setInterval(async () => {
+          const b = await camera.captureFrameAsync();
+          if (b) ws.sendBinary(b);
+        }, 500);
+      })();
+      return () => {
+        c = true;
+      };
+    };
+    const cleanup = tryStart();
     return () => {
-      c = true;
+      cleanup?.();
       if (cameraIntervalRef.current) {
         clearInterval(cameraIntervalRef.current);
         cameraIntervalRef.current = null;
@@ -407,10 +453,13 @@ export default function App() {
       clearInterval(cameraIntervalRef.current);
       cameraIntervalRef.current = null;
     }
+    if (isRecording && cameraViewRef.current)
+      cameraViewRef.current.stopRecording();
+    setIsRecording(false);
     camera.stop();
     ws.sendJson({ type: "stop" });
     setDone({ manual: true });
-  }, [camera, ws]);
+  }, [camera, ws, isRecording]);
 
   const changeSetting = useCallback((k: string, v: unknown) => {
     setPendingSettings((p) => ({ ...p, [k]: v }));
@@ -486,23 +535,18 @@ export default function App() {
           "'Pretendard','Inter',-apple-system,BlinkMacSystemFont,sans-serif",
       }}
     >
-      <video
-        ref={cameraVideoRef}
-        playsInline
-        muted
-        autoPlay
-        style={{ display: "none" }}
-      />
       {selectedAlert && (
         <AlertModal
           alert={selectedAlert}
           onClose={() => setSelectedAlert(null)}
+          mode={mode}
         />
       )}
       {toast && <AlertToast message={toast} onClose={() => setToast(null)} />}
 
       <style>{`
         @keyframes slideIn { from { transform:translateX(100px);opacity:0 } to { transform:translateX(0);opacity:1 } }
+        @keyframes pulse { 0%,100% { opacity:1 } 50% { opacity:0.6 } }
         @media (max-width:640px) { .grid-main { grid-template-columns:1fr !important } .grid-stats { grid-template-columns:repeat(2,1fr) !important } }
       `}</style>
 
@@ -798,7 +842,68 @@ export default function App() {
                         fps={2}
                         onTimeUpdate={(r) => setPlayerResult(r)}
                       />
+                    ) : mode === "camera" ? (
+                      /* 카메라 모드: CameraView (감지 박스 + 시각 + 녹화) */
+                      <>
+                        <CameraView
+                          ref={cameraViewRef}
+                          lastResult={lastResult}
+                          onRecordingComplete={(blob, dur) => {
+                            setIsRecording(false);
+                            const url = URL.createObjectURL(blob);
+                            const a = document.createElement("a");
+                            a.href = url;
+                            a.download = `cseetv_recording_${new Date().toISOString().slice(0, 19).replace(/:/g, "-")}.webm`;
+                            a.click();
+                            URL.revokeObjectURL(url);
+                          }}
+                        />
+                        {/* 녹화 컨트롤 */}
+                        <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+                          {!isRecording ? (
+                            <button
+                              onClick={() => {
+                                cameraViewRef.current?.startRecording();
+                                setIsRecording(true);
+                              }}
+                              style={{
+                                padding: "6px 14px",
+                                borderRadius: 8,
+                                border: `1px solid ${L.border}`,
+                                background: "#fff",
+                                color: L.danger,
+                                fontSize: 11,
+                                fontWeight: 600,
+                                cursor: "pointer",
+                              }}
+                            >
+                              🔴 녹화 시작
+                            </button>
+                          ) : (
+                            <button
+                              onClick={() => {
+                                cameraViewRef.current?.stopRecording();
+                                setIsRecording(false);
+                              }}
+                              style={{
+                                padding: "6px 14px",
+                                borderRadius: 8,
+                                border: "none",
+                                background: L.dangerLight,
+                                color: L.danger,
+                                fontSize: 11,
+                                fontWeight: 600,
+                                cursor: "pointer",
+                                animation: "pulse 1.5s infinite",
+                              }}
+                            >
+                              ⏹ 녹화 중지 & 저장
+                            </button>
+                          )}
+                        </div>
+                      </>
                     ) : (
+                      /* 영상 분석 모드: 서버 프레임 표시 */
                       <div
                         style={{
                           position: "relative",
@@ -809,22 +914,6 @@ export default function App() {
                           aspectRatio: "16/10",
                         }}
                       >
-                        {mode === "camera" && (
-                          <video
-                            ref={cameraVideoRef}
-                            playsInline
-                            muted
-                            autoPlay
-                            style={{
-                              position: "absolute",
-                              inset: 0,
-                              width: "100%",
-                              height: "100%",
-                              objectFit: "contain",
-                              zIndex: 1,
-                            }}
-                          />
-                        )}
                         {frameUrl && (
                           <img
                             src={frameUrl}
@@ -835,8 +924,6 @@ export default function App() {
                               width: "100%",
                               height: "100%",
                               objectFit: "contain",
-                              zIndex: 2,
-                              opacity: mode === "camera" ? 0.7 : 1,
                             }}
                           />
                         )}
@@ -851,7 +938,6 @@ export default function App() {
                               width: "100%",
                               height: "100%",
                               objectFit: "contain",
-                              zIndex: 1,
                             }}
                           />
                         )}
@@ -871,24 +957,6 @@ export default function App() {
                             }}
                           >
                             🔴 움직임 감지
-                          </div>
-                        )}
-                        {mode === "camera" && (
-                          <div
-                            style={{
-                              position: "absolute",
-                              top: 8,
-                              right: 10,
-                              zIndex: 5,
-                              padding: "4px 10px",
-                              borderRadius: 6,
-                              background: "#22C55EDD",
-                              color: "#fff",
-                              fontSize: 11,
-                              fontWeight: 700,
-                            }}
-                          >
-                            LIVE
                           </div>
                         )}
                       </div>
