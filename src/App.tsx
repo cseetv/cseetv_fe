@@ -343,8 +343,10 @@ export default function App() {
           };
 
           // 🔔 브라우저 알림 전송
+          const notifRiskLevel =
+            alert.risk_level === "danger" ? "danger" : "warn";
           notifyDanger(
-            alert.risk_level,
+            notifRiskLevel,
             alert.risk_score,
             `모션: ${alert.motion_pixels.toLocaleString()}px`,
           );
