@@ -16,6 +16,7 @@ import { FramePlayer } from "./components/FramePlayer";
 import { CameraView, type CameraViewHandle } from "./components/CameraView";
 import { useWebSocket } from "./hooks/useWebSocket";
 import { useApi } from "./hooks/useApi";
+import { useNotification } from "./hooks/useNotification";
 import type {
   FrameResult,
   AlertItem,
@@ -299,6 +300,7 @@ export default function App() {
   const alertFrameUrls = useRef<Set<string>>(new Set());
   const frameCountRef = useRef(0);
   const api = useApi();
+  const { notifyDanger, requestPermission, hasPermission } = useNotification();
 
   // ═══ WebSocket ═══
   const handleWsMessage = useCallback(
@@ -339,6 +341,14 @@ export default function App() {
             frame_base64: cap,
             source: mode === "camera" ? "camera" : "video",
           };
+
+          // 🔔 브라우저 알림 전송
+          notifyDanger(
+            alert.risk_level,
+            alert.risk_score,
+            `모션: ${alert.motion_pixels.toLocaleString()}px`,
+          );
+
           setAlerts((p) => [alert, ...p].slice(0, 300));
           setToast({ msg: alert.message, type: "danger" });
         }
@@ -354,7 +364,7 @@ export default function App() {
         setHeatmapUrl(`data:image/jpeg;base64,${msg.heatmap_base64}`);
       }
     },
-    [settings.alert_threshold, mode],
+    [settings.alert_threshold, mode, notifyDanger],
   );
 
   const handleWsBinary = useCallback((blob: Blob) => {
@@ -609,6 +619,22 @@ export default function App() {
               📥 CSV
             </button>
           )}
+          <button
+            onClick={requestPermission}
+            style={{
+              padding: "6px 12px",
+              borderRadius: 8,
+              border: `1px solid ${L.border}`,
+              background: hasPermission ? L.successLight : "#fff",
+              color: hasPermission ? L.success : L.muted,
+              fontSize: 11,
+              fontWeight: 600,
+              cursor: "pointer",
+            }}
+            title={hasPermission ? "알림 권한 허용됨" : "알림 권한 요청"}
+          >
+            {hasPermission ? "🔔 알림 ✓" : "🔔 알림 요청"}
+          </button>
           <div
             style={{
               width: 8,
