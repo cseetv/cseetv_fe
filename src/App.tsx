@@ -15,7 +15,6 @@ import { RoiCanvas } from "./components/RoiCanvas";
 import { FramePlayer } from "./components/FramePlayer";
 import { CameraView, type CameraViewHandle } from "./components/CameraView";
 import { useWebSocket } from "./hooks/useWebSocket";
-import { useCamera } from "./hooks/useCamera";
 import { useApi } from "./hooks/useApi";
 import type {
   FrameResult,
@@ -27,11 +26,8 @@ import type {
   Settings,
 } from "./types";
 
-/* ══════════════════════════════════════════
-   cseetv v6 — Light Theme + Video Playback
-   ══════════════════════════════════════════ */
+/* ═══ cseetv v7 ═══ */
 
-// ── 라이트 테마 ──
 const L = {
   bg: "#F8FAFC",
   card: "#FFFFFF",
@@ -48,7 +44,6 @@ const L = {
   sub: "#475569",
   muted: "#94A3B8",
   dim: "#CBD5E1",
-  safe: "#22C55E",
 };
 
 const DEFAULT_SETTINGS: Settings = {
@@ -73,22 +68,21 @@ const DEFAULT_SETTINGS: Settings = {
   skip_unchanged_frames: true,
 };
 
-function downloadCSV(data: Record<string, unknown>[], filename: string) {
+function downloadCSV(data: Record<string, unknown>[], fn: string) {
   if (!data.length) return;
-  const keys = Object.keys(data[0]);
+  const k = Object.keys(data[0]);
   const csv = [
-    keys.join(","),
-    ...data.map((r) => keys.map((k) => JSON.stringify(r[k] ?? "")).join(",")),
+    k.join(","),
+    ...data.map((r) => k.map((c) => JSON.stringify(r[c] ?? "")).join(",")),
   ].join("\n");
   const a = document.createElement("a");
   a.href = URL.createObjectURL(
     new Blob(["\uFEFF" + csv], { type: "text/csv" }),
   );
-  a.download = filename;
+  a.download = fn;
   a.click();
 }
 
-// ── 카드 (밝은 테마) ──
 function LCard({
   children,
   style,
@@ -111,15 +105,57 @@ function LCard({
   );
 }
 
+// ── 토스트 ──
+function Toast({
+  message,
+  type = "info",
+  onClose,
+}: {
+  message: string;
+  type?: "info" | "success" | "danger";
+  onClose: () => void;
+}) {
+  useEffect(() => {
+    const t = setTimeout(onClose, 3500);
+    return () => clearTimeout(t);
+  }, [onClose]);
+  const bg =
+    type === "danger"
+      ? L.dangerLight
+      : type === "success"
+        ? L.successLight
+        : L.accentLight;
+  const fg =
+    type === "danger" ? L.danger : type === "success" ? L.success : L.accent;
+  return (
+    <div
+      style={{
+        position: "fixed",
+        top: 64,
+        right: 16,
+        zIndex: 90,
+        padding: "10px 16px",
+        borderRadius: 10,
+        background: bg,
+        color: fg,
+        fontSize: 12,
+        fontWeight: 600,
+        boxShadow: "0 4px 20px #00000010",
+        animation: "slideIn 0.3s ease",
+      }}
+    >
+      {message}
+    </div>
+  );
+}
+
 // ── 알림 모달 ──
 function AlertModal({
   alert: a,
   onClose,
-  mode: sourceMode,
 }: {
-  alert: AlertItem;
+  alert: AlertItem & { source?: string };
   onClose: () => void;
-  mode: string;
 }) {
   return (
     <div
@@ -183,8 +219,8 @@ function AlertModal({
           <div
             style={{
               fontSize: 14,
-              color: L.text,
               fontWeight: 700,
+              color: L.text,
               marginBottom: 8,
             }}
           >
@@ -197,71 +233,27 @@ function AlertModal({
               gap: 8,
               fontSize: 12,
               color: L.sub,
-              marginBottom: 8,
             }}
           >
             <div>
-              🕐{" "}
+              🕐 {a.source === "camera" ? "감지 시각" : "영상 시점"}:{" "}
+              <strong>{a.timestamp}</strong>
+            </div>
+            <div>
+              📹 소스:{" "}
               <strong>
-                {sourceMode === "camera" ? "감지 시각" : "영상 시점"}
+                {a.source === "camera" ? "실시간 웹캠" : "업로드 영상"}
               </strong>
-              : {a.timestamp}
             </div>
             <div>
-              📹 <strong>소스</strong>:{" "}
-              {sourceMode === "camera" ? "실시간 웹캠" : "업로드 영상"}
+              ⚠️ 위험도: <strong>{a.risk_score.toFixed(1)}</strong>
             </div>
             <div>
-              ⚠️ <strong>위험도</strong>: {a.risk_score.toFixed(1)}
-            </div>
-            <div>
-              📊 <strong>모션</strong>: {a.motion_pixels.toLocaleString()}px
-            </div>
-            <div>
-              📦 <strong>감지 영역</strong>: {a.boxes?.length || 0}개
-            </div>
-            <div>
-              🏷 <strong>등급</strong>:{" "}
-              {a.risk_level === "danger" ? "위험" : "주의"}
+              📊 모션: <strong>{a.motion_pixels.toLocaleString()}px</strong>
             </div>
           </div>
         </div>
       </div>
-    </div>
-  );
-}
-
-// ── 알림 토스트 (웹캠 실시간) ──
-function AlertToast({
-  message,
-  onClose,
-}: {
-  message: string;
-  onClose: () => void;
-}) {
-  useEffect(() => {
-    const t = setTimeout(onClose, 4000);
-    return () => clearTimeout(t);
-  }, [onClose]);
-  return (
-    <div
-      style={{
-        position: "fixed",
-        top: 70,
-        right: 16,
-        zIndex: 90,
-        padding: "10px 16px",
-        borderRadius: 10,
-        background: L.dangerLight,
-        border: `1px solid #FECACA`,
-        color: L.danger,
-        fontSize: 12,
-        fontWeight: 600,
-        boxShadow: "0 4px 20px #EF444420",
-        animation: "slideIn 0.3s ease",
-      }}
-    >
-      🔴 {message}
     </div>
   );
 }
@@ -276,7 +268,10 @@ export default function App() {
   const [frameUrl, setFrameUrl] = useState<string | null>(null);
   const [lastResult, setLastResult] = useState<FrameResult | null>(null);
   const [timeline, setTimeline] = useState<TimelinePoint[]>([]);
-  const [alerts, setAlerts] = useState<AlertItem[]>([]);
+  const [alerts, setAlerts] = useState<(AlertItem & { source: string })[]>([]);
+  const [alertFilter, setAlertFilter] = useState<"all" | "camera" | "video">(
+    "all",
+  );
   const [allResults, setAllResults] = useState<FrameResult[]>([]);
   const [progress, setProgress] = useState<{
     current: number;
@@ -289,17 +284,20 @@ export default function App() {
   const [uploading, setUploading] = useState(false);
   const [heatmapUrl, setHeatmapUrl] = useState<string | null>(null);
   const [mode, setMode] = useState<"idle" | "video" | "camera">("idle");
-  const [selectedAlert, setSelectedAlert] = useState<AlertItem | null>(null);
-  const [toast, setToast] = useState<string | null>(null);
+  const [selectedAlert, setSelectedAlert] = useState<
+    (AlertItem & { source: string }) | null
+  >(null);
+  const [toast, setToast] = useState<{
+    msg: string;
+    type: "info" | "success" | "danger";
+  } | null>(null);
   const [playerResult, setPlayerResult] = useState<FrameResult | null>(null);
+  const [isRecording, setIsRecording] = useState(false);
 
-  const cameraVideoRef = useRef<HTMLVideoElement>(null);
   const cameraViewRef = useRef<CameraViewHandle>(null);
-  const cameraIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const frameUrlRef = useRef<string | null>(null);
   const alertFrameUrls = useRef<Set<string>>(new Set());
-  const [isRecording, setIsRecording] = useState(false);
-  const camera = useCamera();
+  const frameCountRef = useRef(0);
   const api = useApi();
 
   // ═══ WebSocket ═══
@@ -310,6 +308,7 @@ export default function App() {
         const fr = msg as unknown as FrameResult;
         setLastResult(fr);
         setAllResults((p) => [...p, fr]);
+        frameCountRef.current++;
         if (fr.frame_base64) {
           const url = `data:image/jpeg;base64,${fr.frame_base64}`;
           setFrameUrl(url);
@@ -325,17 +324,23 @@ export default function App() {
             ? `data:image/jpeg;base64,${fr.frame_base64}`
             : frameUrlRef.current || undefined;
           if (cap?.startsWith("blob:")) alertFrameUrls.current.add(cap);
-          const alert: AlertItem = {
-            timestamp: new Date().toLocaleTimeString("ko-KR"),
+          // 영상: 프레임 번호 → 시간 변환 / 카메라: 실제 시각
+          const ts =
+            mode === "camera"
+              ? new Date().toLocaleTimeString("ko-KR", { hour12: false })
+              : `${Math.floor(frameCountRef.current / 2 / 60)}:${(Math.floor(frameCountRef.current / 2) % 60).toString().padStart(2, "0")}`;
+          const alert: AlertItem & { source: string } = {
+            timestamp: ts,
             risk_score: risk,
             risk_level: fr.motion?.risk_level || "warn",
             motion_pixels: fr.motion?.total_motion_pixels || 0,
             boxes: fr.motion?.boxes || [],
             message: `움직임 감지 (위험도 ${risk.toFixed(0)})`,
             frame_base64: cap,
+            source: mode === "camera" ? "camera" : "video",
           };
-          setAlerts((p) => [alert, ...p].slice(0, 200));
-          setToast(alert.message);
+          setAlerts((p) => [alert, ...p].slice(0, 300));
+          setToast({ msg: alert.message, type: "danger" });
         }
       } else if (t === "progress") {
         setProgress({
@@ -349,7 +354,7 @@ export default function App() {
         setHeatmapUrl(`data:image/jpeg;base64,${msg.heatmap_base64}`);
       }
     },
-    [settings.alert_threshold],
+    [settings.alert_threshold, mode],
   );
 
   const handleWsBinary = useCallback((blob: Blob) => {
@@ -364,18 +369,20 @@ export default function App() {
 
   const ws = useWebSocket(handleWsMessage, handleWsBinary);
 
+  // ═══ 초기화 ═══
   const resetState = useCallback(() => {
     setFrameUrl(null);
     setLastResult(null);
     setTimeline([]);
-    setAlerts([]);
     setAllResults([]);
     setDone(null);
     setHeatmapUrl(null);
     setProgress(null);
     setPlayerResult(null);
+    frameCountRef.current = 0;
   }, []);
 
+  // ═══ 영상 업로드 ═══
   const handleVideoUpload = useCallback(
     async (file: File) => {
       try {
@@ -412,55 +419,33 @@ export default function App() {
     });
   }, [videoInfo, ws, pendingSettings, resetState]);
 
+  // ═══ 카메라 ═══
   const startCamera = useCallback(() => {
-    setMode("camera");
     resetState();
+    setMode("camera");
     ws.connect();
   }, [ws, resetState]);
-  useEffect(() => {
-    if (mode !== "camera") return;
-    // CameraView가 렌더링된 후 video 요소를 가져옴
-    const tryStart = () => {
-      const el = cameraViewRef.current?.getVideo();
-      if (!el) {
-        setTimeout(tryStart, 200);
-        return;
-      }
-      let c = false;
-      (async () => {
-        await camera.start(el);
-        if (c) return;
-        cameraIntervalRef.current = setInterval(async () => {
-          const b = await camera.captureFrameAsync();
-          if (b) ws.sendBinary(b);
-        }, 500);
-      })();
-      return () => {
-        c = true;
-      };
-    };
-    const cleanup = tryStart();
-    return () => {
-      cleanup?.();
-      if (cameraIntervalRef.current) {
-        clearInterval(cameraIntervalRef.current);
-        cameraIntervalRef.current = null;
-      }
-    };
-  }, [mode, camera, ws]);
+
   const stopCamera = useCallback(() => {
-    if (cameraIntervalRef.current) {
-      clearInterval(cameraIntervalRef.current);
-      cameraIntervalRef.current = null;
-    }
     if (isRecording && cameraViewRef.current)
       cameraViewRef.current.stopRecording();
     setIsRecording(false);
-    camera.stop();
     ws.sendJson({ type: "stop" });
-    setDone({ manual: true });
-  }, [camera, ws, isRecording]);
+    setMode("idle");
+    setFrameUrl(null);
+    setLastResult(null);
+    setToast({ msg: "카메라가 중지되었습니다", type: "success" });
+  }, [ws, isRecording]);
 
+  // CameraView에서 캡처한 프레임 → 서버 전송
+  const handleCameraFrame = useCallback(
+    (blob: Blob) => {
+      ws.sendBinary(blob);
+    },
+    [ws],
+  );
+
+  // ═══ 설정 ═══
   const changeSetting = useCallback((k: string, v: unknown) => {
     setPendingSettings((p) => ({ ...p, [k]: v }));
     setSettingsDirty(true);
@@ -469,6 +454,7 @@ export default function App() {
     setSettings(pendingSettings);
     ws.sendJson({ type: "update_settings", ...pendingSettings });
     setSettingsDirty(false);
+    setToast({ msg: "설정이 저장되었습니다", type: "success" });
   }, [pendingSettings, ws]);
   const updateRoi = useCallback(
     (p: RoiPolygon[]) => {
@@ -486,6 +472,7 @@ export default function App() {
     [ws],
   );
 
+  // ═══ CSV ═══
   const exportResults = useCallback(() => {
     if (!allResults.length) return;
     downloadCSV(
@@ -501,16 +488,14 @@ export default function App() {
     );
   }, [allResults, videoInfo]);
 
-  useEffect(
-    () => () => {
-      if (cameraIntervalRef.current) clearInterval(cameraIntervalRef.current);
-    },
-    [],
-  );
-
+  // derived
   const dr = playerResult || lastResult;
   const riskScore = dr?.motion?.risk_score || 0;
   const isPlayback = done && videoPreviewUrl && mode === "video";
+  const filteredAlerts =
+    alertFilter === "all"
+      ? alerts
+      : alerts.filter((a) => a.source === alertFilter);
 
   const summary = useMemo(() => {
     if (!allResults.length) return null;
@@ -531,23 +516,26 @@ export default function App() {
         minHeight: "100vh",
         background: L.bg,
         color: L.text,
-        fontFamily:
-          "'Pretendard','Inter',-apple-system,BlinkMacSystemFont,sans-serif",
+        fontFamily: "'Pretendard','Inter',-apple-system,sans-serif",
       }}
     >
       {selectedAlert && (
         <AlertModal
           alert={selectedAlert}
           onClose={() => setSelectedAlert(null)}
-          mode={mode}
         />
       )}
-      {toast && <AlertToast message={toast} onClose={() => setToast(null)} />}
-
+      {toast && (
+        <Toast
+          message={toast.msg}
+          type={toast.type}
+          onClose={() => setToast(null)}
+        />
+      )}
       <style>{`
-        @keyframes slideIn { from { transform:translateX(100px);opacity:0 } to { transform:translateX(0);opacity:1 } }
-        @keyframes pulse { 0%,100% { opacity:1 } 50% { opacity:0.6 } }
-        @media (max-width:640px) { .grid-main { grid-template-columns:1fr !important } .grid-stats { grid-template-columns:repeat(2,1fr) !important } }
+        @keyframes slideIn{from{transform:translateX(100px);opacity:0}to{transform:translateX(0);opacity:1}}
+        @keyframes pulse{0%,100%{opacity:1}50%{opacity:.6}}
+        @media(max-width:640px){.gm{grid-template-columns:1fr!important}.gs{grid-template-columns:repeat(2,1fr)!important}}
       `}</style>
 
       {/* 헤더 */}
@@ -568,12 +556,7 @@ export default function App() {
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
           <span style={{ fontSize: 20 }}>📹</span>
           <span
-            style={{
-              fontSize: 16,
-              fontWeight: 800,
-              color: L.text,
-              letterSpacing: "-0.5px",
-            }}
+            style={{ fontSize: 16, fontWeight: 800, letterSpacing: "-0.5px" }}
           >
             cseetv
           </span>
@@ -646,21 +629,20 @@ export default function App() {
       <div
         style={{
           display: "flex",
-          gap: 0,
           borderBottom: `1px solid ${L.border}`,
           background: "#fff",
           overflow: "auto",
         }}
       >
         {[
-          { id: "dashboard", label: "📊 대시보드" },
-          { id: "roi", label: "🎯 ROI" },
+          { id: "dashboard", lb: "📊 대시보드" },
+          { id: "roi", lb: "🎯 ROI" },
           {
             id: "alerts",
-            label: `🔔 알림${alerts.length ? ` (${alerts.length})` : ""}`,
+            lb: `🔔 알림${alerts.length ? ` (${alerts.length})` : ""}`,
           },
-          { id: "analysis", label: "📈 분석" },
-          { id: "settings", label: "⚙️ 설정" },
+          { id: "analysis", lb: "📈 분석" },
+          { id: "settings", lb: "⚙️ 설정" },
         ].map((n) => (
           <button
             key={n.id}
@@ -680,7 +662,7 @@ export default function App() {
               whiteSpace: "nowrap",
             }}
           >
-            {n.label}
+            {n.lb}
           </button>
         ))}
       </div>
@@ -691,7 +673,6 @@ export default function App() {
         {/* ═══ 대시보드 ═══ */}
         {page === "dashboard" && (
           <>
-            {/* 액션 바 */}
             <div
               style={{
                 display: "flex",
@@ -774,22 +755,19 @@ export default function App() {
                     marginLeft: "auto",
                   }}
                 >
-                  ✅ 분석 완료 — 재생 가능
+                  ✅ 분석 완료
                 </span>
               )}
             </div>
 
             {progress && (
-              <div style={{ marginBottom: 12 }}>
-                <ProgressBar
-                  current={progress.current}
-                  total={progress.total}
-                  label="영상 분석"
-                />
-              </div>
+              <ProgressBar
+                current={progress.current}
+                total={progress.total}
+                label="분석"
+              />
             )}
 
-            {/* 빈 상태 */}
             {!lastResult && !isPlayback && mode === "idle" ? (
               <div
                 style={{
@@ -825,7 +803,7 @@ export default function App() {
             ) : (
               <>
                 <div
-                  className="grid-main"
+                  className="gm"
                   style={{
                     display: "grid",
                     gridTemplateColumns: "1fr 200px",
@@ -833,32 +811,27 @@ export default function App() {
                     marginBottom: 12,
                   }}
                 >
-                  {/* 영상 영역 */}
                   <div>
-                    {isPlayback && videoPreviewUrl ? (
-                      <FramePlayer
-                        videoUrl={videoPreviewUrl}
-                        results={allResults}
-                        fps={2}
-                        onTimeUpdate={(r) => setPlayerResult(r)}
-                      />
-                    ) : mode === "camera" ? (
-                      /* 카메라 모드: CameraView (감지 박스 + 시각 + 녹화) */
+                    {/* 카메라 모드 */}
+                    {mode === "camera" ? (
                       <>
                         <CameraView
                           ref={cameraViewRef}
+                          active={true}
                           lastResult={lastResult}
-                          onRecordingComplete={(blob, dur) => {
+                          onFrame={handleCameraFrame}
+                          onRecordingComplete={(blob) => {
                             setIsRecording(false);
-                            const url = URL.createObjectURL(blob);
                             const a = document.createElement("a");
-                            a.href = url;
-                            a.download = `cseetv_recording_${new Date().toISOString().slice(0, 19).replace(/:/g, "-")}.webm`;
+                            a.href = URL.createObjectURL(blob);
+                            a.download = `cseetv_${new Date().toISOString().slice(0, 19).replace(/:/g, "-")}.webm`;
                             a.click();
-                            URL.revokeObjectURL(url);
+                            setToast({
+                              msg: "녹화가 저장되었습니다",
+                              type: "success",
+                            });
                           }}
                         />
-                        {/* 녹화 컨트롤 */}
                         <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
                           {!isRecording ? (
                             <button
@@ -902,8 +875,16 @@ export default function App() {
                           )}
                         </div>
                       </>
+                    ) : /* 영상 재생 모드 */
+                    isPlayback && videoPreviewUrl ? (
+                      <FramePlayer
+                        videoUrl={videoPreviewUrl}
+                        results={allResults}
+                        fps={2}
+                        onTimeUpdate={(r) => setPlayerResult(r)}
+                      />
                     ) : (
-                      /* 영상 분석 모드: 서버 프레임 표시 */
+                      /* 영상 분석 중 */
                       <div
                         style={{
                           position: "relative",
@@ -1017,10 +998,8 @@ export default function App() {
                     </LCard>
                   </div>
                 </div>
-
-                {/* 통계 카드 */}
                 <div
-                  className="grid-stats"
+                  className="gs"
                   style={{
                     display: "grid",
                     gridTemplateColumns: "repeat(4,1fr)",
@@ -1082,7 +1061,6 @@ export default function App() {
                     </div>
                   </LCard>
                 </div>
-
                 {timeline.length > 1 && (
                   <LCard style={{ marginBottom: 12 }}>
                     <div
@@ -1092,9 +1070,7 @@ export default function App() {
                         marginBottom: 6,
                       }}
                     >
-                      <span
-                        style={{ fontSize: 11, fontWeight: 600, color: L.text }}
-                      >
+                      <span style={{ fontSize: 11, fontWeight: 600 }}>
                         위험도 타임라인
                       </span>
                       <span style={{ fontSize: 10, color: L.muted }}>
@@ -1115,15 +1091,33 @@ export default function App() {
             <h2 style={{ fontSize: 16, fontWeight: 700, marginBottom: 12 }}>
               관심 영역 (ROI)
             </h2>
-            <LCard style={{ padding: 0, overflow: "hidden", marginBottom: 12 }}>
-              <RoiCanvas
-                imageUrl={frameUrl}
-                width={640}
-                height={480}
-                polygons={roiPolygons}
-                onChange={updateRoi}
-              />
-            </LCard>
+            {mode === "camera" ? (
+              <div
+                style={{
+                  marginBottom: 12,
+                  padding: 12,
+                  background: L.warnLight,
+                  borderRadius: 10,
+                  fontSize: 12,
+                  color: L.warn,
+                }}
+              >
+                카메라 모드에서는 대시보드에서 ROI를 확인하세요. 카메라를 중지한
+                뒤 마지막 프레임에서 ROI를 그릴 수 있습니다.
+              </div>
+            ) : (
+              <LCard
+                style={{ padding: 0, overflow: "hidden", marginBottom: 12 }}
+              >
+                <RoiCanvas
+                  imageUrl={frameUrl}
+                  width={640}
+                  height={480}
+                  polygons={roiPolygons}
+                  onChange={updateRoi}
+                />
+              </LCard>
+            )}
             {roiPolygons.map((z, i) => (
               <LCard key={z.id} style={{ marginBottom: 6 }}>
                 <div
@@ -1190,6 +1184,7 @@ export default function App() {
                       downloadCSV(
                         alerts.map((a) => ({
                           time: a.timestamp,
+                          source: a.source,
                           risk: a.risk_score,
                           level: a.risk_level,
                           pixels: a.motion_pixels,
@@ -1229,7 +1224,37 @@ export default function App() {
                 )}
               </div>
             </div>
-            {alerts.length === 0 ? (
+            {/* 필터 탭 */}
+            <div style={{ display: "flex", gap: 4, marginBottom: 12 }}>
+              {(
+                [
+                  ["all", "전체"],
+                  ["camera", "🟢 웹캠"],
+                  ["video", "📁 업로드"],
+                ] as const
+              ).map(([v, lb]) => (
+                <button
+                  key={v}
+                  onClick={() => setAlertFilter(v)}
+                  style={{
+                    padding: "5px 12px",
+                    borderRadius: 8,
+                    border: `1px solid ${alertFilter === v ? L.accent : L.border}`,
+                    background: alertFilter === v ? L.accentLight : "#fff",
+                    color: alertFilter === v ? L.accent : L.muted,
+                    fontSize: 11,
+                    fontWeight: 600,
+                    cursor: "pointer",
+                  }}
+                >
+                  {lb}{" "}
+                  {v === "all"
+                    ? alerts.length
+                    : alerts.filter((a) => a.source === v).length}
+                </button>
+              ))}
+            </div>
+            {filteredAlerts.length === 0 ? (
               <div
                 style={{
                   textAlign: "center",
@@ -1241,10 +1266,10 @@ export default function App() {
                   background: "#fff",
                 }}
               >
-                위험도 {settings.alert_threshold} 이상일 때 기록됩니다
+                해당 카테고리의 알림이 없습니다
               </div>
             ) : (
-              alerts.map((a, i) => (
+              filteredAlerts.map((a, i) => (
                 <LCard
                   key={i}
                   onClick={() => setSelectedAlert(a)}
@@ -1268,15 +1293,42 @@ export default function App() {
                         }}
                       />
                     )}
-                    <div>
+                    <div style={{ flex: 1, minWidth: 0 }}>
                       <div
-                        style={{ fontSize: 12, fontWeight: 600, color: L.text }}
+                        style={{
+                          display: "flex",
+                          justifyContent: "space-between",
+                          alignItems: "center",
+                        }}
                       >
-                        {a.message}
+                        <span
+                          style={{
+                            fontSize: 12,
+                            fontWeight: 600,
+                            color: L.text,
+                          }}
+                        >
+                          {a.message}
+                        </span>
+                        <span
+                          style={{
+                            fontSize: 9,
+                            padding: "2px 6px",
+                            borderRadius: 99,
+                            background:
+                              a.source === "camera"
+                                ? L.successLight
+                                : L.accentLight,
+                            color: a.source === "camera" ? L.success : L.accent,
+                          }}
+                        >
+                          {a.source === "camera" ? "웹캠" : "영상"}
+                        </span>
                       </div>
                       <div
                         style={{ fontSize: 11, color: L.muted, marginTop: 2 }}
                       >
+                        {a.source === "camera" ? "🕐 " : "⏱ "}
                         {a.timestamp} | 위험도: {a.risk_score.toFixed(1)}
                       </div>
                     </div>
@@ -1313,24 +1365,19 @@ export default function App() {
                     cursor: "pointer",
                   }}
                 >
-                  📥 CSV 내보내기
+                  📥 CSV
                 </button>
               )}
             </div>
             {summary ? (
               <LCard style={{ marginBottom: 12 }}>
                 <div
-                  style={{
-                    fontSize: 13,
-                    fontWeight: 700,
-                    color: L.text,
-                    marginBottom: 10,
-                  }}
+                  style={{ fontSize: 13, fontWeight: 700, marginBottom: 10 }}
                 >
                   요약 {done && "✅"}
                 </div>
                 <div
-                  className="grid-stats"
+                  className="gs"
                   style={{
                     display: "grid",
                     gridTemplateColumns: "repeat(4,1fr)",
@@ -1338,9 +1385,7 @@ export default function App() {
                   }}
                 >
                   <div>
-                    <div style={{ fontSize: 10, color: L.muted }}>
-                      분석 프레임
-                    </div>
+                    <div style={{ fontSize: 10, color: L.muted }}>분석</div>
                     <div
                       style={{ fontSize: 20, fontWeight: 700, color: L.accent }}
                     >
@@ -1348,9 +1393,7 @@ export default function App() {
                     </div>
                   </div>
                   <div>
-                    <div style={{ fontSize: 10, color: L.muted }}>
-                      감지 횟수
-                    </div>
+                    <div style={{ fontSize: 10, color: L.muted }}>감지</div>
                     <div
                       style={{ fontSize: 20, fontWeight: 700, color: L.danger }}
                     >
@@ -1392,13 +1435,13 @@ export default function App() {
                   marginBottom: 12,
                 }}
               >
-                영상 분석 후 결과가 표시됩니다
+                분석 후 결과 표시
               </div>
             )}
             {heatmapUrl && (
               <LCard style={{ marginBottom: 12 }}>
                 <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 8 }}>
-                  움직임 히트맵
+                  히트맵
                 </div>
                 <img
                   src={heatmapUrl}
@@ -1574,7 +1617,7 @@ export default function App() {
                         ? L.accent
                         : "#E2E8F0",
                       position: "relative",
-                      transition: "all 0.2s",
+                      transition: "all .2s",
                     }}
                   >
                     <div
@@ -1586,7 +1629,7 @@ export default function App() {
                         position: "absolute",
                         top: 3,
                         left: (pendingSettings as any)[s.key] ? 21 : 3,
-                        transition: "left 0.2s",
+                        transition: "left .2s",
                         boxShadow: "0 1px 3px #0001",
                       }}
                     />
