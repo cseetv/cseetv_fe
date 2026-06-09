@@ -568,9 +568,13 @@ export default function App() {
           display: "flex",
           justifyContent: "space-between",
           alignItems: "center",
+          flexWrap: "wrap",
+          gap: 8,
         }}
       >
-        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+        <div
+          style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}
+        >
           <span style={{ fontSize: 20 }}>📹</span>
           <span
             style={{ fontSize: 16, fontWeight: 800, letterSpacing: "-0.5px" }}
@@ -591,7 +595,15 @@ export default function App() {
             </span>
           )}
         </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 8,
+            flexWrap: "wrap",
+            justifyContent: "flex-end",
+          }}
+        >
           {videoInfo && done && (
             <button
               onClick={reanalyze}
