@@ -63,7 +63,7 @@ public/
 
 ## 백엔드 연결
 
-- 백엔드 레포: [cseetv_ip](../cseetv_ip/)
+- 백엔드 레포: [cseetv_ip](https://github.com/cseetv/cseetv_ip)
 - WebSocket 주소: 환경변수 `VITE_WS_URL` (기본: `ws://localhost:8000/ws`)
 - REST API: 환경변수 `VITE_API_URL` (기본: `http://localhost:8000`)
 
